@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
 import Layout from '../components/Layout';
 import { ThOrdenable, useOrdenTabla } from '../components/TablaHeader';
 import TarjetasResumen from '../components/Tarjetas';
 import { useAuth } from '../lib/AuthContext';
 import { supabase } from '../lib/supabaseClient';
+import { primerDiaMesActual, hoyISO } from '../lib/fechas';
 
 const COLUMNAS = [
   { clave: 'co', etiqueta: 'C.O.' },
@@ -31,8 +32,8 @@ export default function Pendientes({ tema, alternarTema }) {
   const [filas, setFilas] = useState([]);
   const [motivos, setMotivos] = useState([]);
   const [tarjetas, setTarjetas] = useState(null);
-  const [fechaInicio, setFechaInicio] = useState('');
-  const [fechaFin, setFechaFin] = useState('');
+  const [fechaInicio, setFechaInicio] = useState(primerDiaMesActual());
+  const [fechaFin, setFechaFin] = useState(hoyISO());
   const [soloSinMotivo, setSoloSinMotivo] = useState(false);
   const [columnasOcultas, setColumnasOcultas] = useState([]);
   const [seleccionados, setSeleccionados] = useState(new Set());
@@ -42,6 +43,24 @@ export default function Pendientes({ tema, alternarTema }) {
   const [anchos, setAnchos] = useState({});
   const [orden, setOrden] = useState(null);
   const ordenarFilas = useOrdenTabla();
+
+  const scrollSuperior = useRef(null);
+  const scrollTabla = useRef(null);
+  const sincronizando = useRef(false);
+
+  function sincronizarDesdeArriba() {
+    if (sincronizando.current) return;
+    sincronizando.current = true;
+    if (scrollTabla.current) scrollTabla.current.scrollLeft = scrollSuperior.current.scrollLeft;
+    sincronizando.current = false;
+  }
+
+  function sincronizarDesdeTabla() {
+    if (sincronizando.current) return;
+    sincronizando.current = true;
+    if (scrollSuperior.current) scrollSuperior.current.scrollLeft = scrollTabla.current.scrollLeft;
+    sincronizando.current = false;
+  }
 
   function alRedimensionar(clave, ancho) {
     setAnchos((prev) => ({ ...prev, [clave]: ancho }));
@@ -73,8 +92,34 @@ export default function Pendientes({ tema, alternarTema }) {
     if (soloSinMotivo) consulta = consulta.is('motivo_id', null);
     if (cosPermitidos) consulta = consulta.in('co', cosPermitidos.length ? cosPermitidos : ['__ninguno__']);
 
-    const { data, error } = await consulta.order('co', { ascending: true }).order('referencia', { ascending: true });
-    if (!error) setFilas(data || []);
+    const co_list = cosPermitidos && cosPermitidos.length ? cosPermitidos : null;
+
+    const [
+      { data, error },
+      { data: pc, error: errorPc },
+      { data: pr, error: errorPr },
+    ] = await Promise.all([
+      consulta.order('co', { ascending: true }).order('referencia', { ascending: true }),
+      supabase.rpc('obtener_pareto_cliente', { fecha_inicio: fechaInicio || null, fecha_fin: fechaFin || null, co_list }),
+      supabase.rpc('obtener_pareto_referencia', { fecha_inicio: fechaInicio || null, fecha_fin: fechaFin || null, co_list }),
+    ]);
+
+    if (errorPc || errorPr) {
+      setMensaje(`No se pudo calcular la clasificación: ${errorPc?.message || errorPr?.message}`);
+    }
+
+    if (!error) {
+      const mapaCliente = new Map((pc || []).map((r) => [`${r.co}||${r.cliente}`, r.clasificacion_cliente]));
+      const mapaReferencia = new Map((pr || []).map((r) => [`${r.co}||${r.item}`, r.clasificacion_referencia]));
+      const filasConClasificacion = (data || []).map((f) => ({
+        ...f,
+        clasificacion_cliente: mapaCliente.get(`${f.co}||${f.razon_social_cliente_despacho}`) || null,
+        clasificacion_referencia: mapaReferencia.get(`${f.co}||${f.desc_item}`) || null,
+      }));
+      setFilas(filasConClasificacion);
+    } else {
+      setMensaje(`Error cargando pendientes: ${error.message}`);
+    }
     setCargando(false);
   }
 
@@ -138,16 +183,6 @@ export default function Pendientes({ tema, alternarTema }) {
     }
   }
 
-  const [refrescando, setRefrescando] = useState(false);
-
-  async function actualizarClasificacion() {
-    setRefrescando(true);
-    const { error } = await supabase.rpc('refrescar_pareto');
-    setMensaje(error ? `No se pudo actualizar: ${error.message}` : 'Clasificación actualizada.');
-    setRefrescando(false);
-    cargarPendientes();
-  }
-
   function exportar() {
     const datos = filas.map((f) => ({
       'C.O.': f.co,
@@ -181,6 +216,7 @@ export default function Pendientes({ tema, alternarTema }) {
   );
 
   const filasOrdenadas = useMemo(() => ordenarFilas(filas, orden), [filas, orden]);
+  const anchoTotalTabla = 32 + 160 + columnasVisibles.reduce((suma, c) => suma + (anchos[c.clave] || 140), 0);
 
   return (
     <Layout tema={tema} alternarTema={alternarTema} requiereModulo="pendientes">
@@ -202,8 +238,13 @@ export default function Pendientes({ tema, alternarTema }) {
           {' '}Solo sin motivo
         </label>
         <button style={{ marginTop: 16 }} onClick={exportar}>Descargar Excel</button>
-        <button style={{ marginTop: 16 }} onClick={actualizarClasificacion} disabled={refrescando} title="Vuelve a calcular la clasificación A/B/C/D con los datos más recientes">
-          {refrescando ? 'Actualizando...' : 'Actualizar clasificación'}
+        <button
+          style={{ marginTop: 16 }}
+          onClick={() => { cargarPendientes(); cargarTarjetas(); }}
+          disabled={cargando}
+          title="Vuelve a consultar Pendientes y la clasificación con los datos más recientes"
+        >
+          {cargando ? 'Actualizando...' : 'Actualizar'}
         </button>
       </div>
 
@@ -243,58 +284,67 @@ export default function Pendientes({ tema, alternarTema }) {
 
       {mensaje && <p>{mensaje}</p>}
       {cargando && <p className="indicador-actualizando">Actualizando...</p>}
-      <table>
-        <thead>
-          <tr>
-            <th style={{ width: 32 }}></th>
-            {columnasVisibles.map((c) => (
-              <ThOrdenable
-                key={c.clave}
-                clave={c.clave}
-                etiqueta={c.etiqueta}
-                ancho={anchos[c.clave] || 140}
-                alRedimensionar={alRedimensionar}
-                orden={orden}
-                alOrdenar={alOrdenar}
-              />
-            ))}
-            <th style={{ width: 160 }}>Asignar motivo</th>
-          </tr>
-        </thead>
-        <tbody>
-          {filasOrdenadas.map((f) => (
-            <tr key={f.id}>
-              <td>
-                <input
-                  type="checkbox"
-                  checked={seleccionados.has(f.id)}
-                  onChange={() => alternarSeleccion(f.id)}
-                />
-              </td>
+
+      {/* Barra de scroll horizontal arriba de la tabla, sincronizada, para
+          no tener que bajar hasta el final para moverse a los lados. */}
+      <div ref={scrollSuperior} onScroll={sincronizarDesdeArriba} className="scroll-superior">
+        <div style={{ width: anchoTotalTabla, height: 1 }} />
+      </div>
+
+      <div ref={scrollTabla} onScroll={sincronizarDesdeTabla} className="tabla-pagina-scroll" style={{ overflow: 'auto', maxHeight: '65vh' }}>
+        <table>
+          <thead>
+            <tr>
+              <th style={{ width: 32 }}></th>
               {columnasVisibles.map((c) => (
-                <td key={c.clave} style={{ width: anchos[c.clave] || 140, maxWidth: anchos[c.clave] || 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {c.clave === 'clasificacion_cliente' || c.clave === 'clasificacion_referencia' ? (
-                    f[c.clave] ? <span className={`badge badge-${f[c.clave]}`}>{f[c.clave]}</span> : '-'
-                  ) : (
-                    f[c.clave] ?? '-'
-                  )}
-                </td>
+                <ThOrdenable
+                  key={c.clave}
+                  clave={c.clave}
+                  etiqueta={c.etiqueta}
+                  ancho={anchos[c.clave] || 140}
+                  alRedimensionar={alRedimensionar}
+                  orden={orden}
+                  alOrdenar={alOrdenar}
+                />
               ))}
-              <td>
-                <select
-                  value={f.motivo_id || ''}
-                  onChange={(e) => asignarMotivo([f.id], e.target.value)}
-                >
-                  <option value="">Sin motivo</option>
-                  {motivos.map((m) => (
-                    <option key={m.id} value={m.id}>{m.nombre}</option>
-                  ))}
-                </select>
-              </td>
+              <th style={{ width: 160 }}>Asignar motivo</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {filasOrdenadas.map((f) => (
+              <tr key={f.id}>
+                <td>
+                  <input
+                    type="checkbox"
+                    checked={seleccionados.has(f.id)}
+                    onChange={() => alternarSeleccion(f.id)}
+                  />
+                </td>
+                {columnasVisibles.map((c) => (
+                  <td key={c.clave} style={{ width: anchos[c.clave] || 140, maxWidth: anchos[c.clave] || 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {c.clave === 'clasificacion_cliente' || c.clave === 'clasificacion_referencia' ? (
+                      f[c.clave] ? <span className={`badge badge-${f[c.clave]}`}>{f[c.clave]}</span> : '-'
+                    ) : (
+                      f[c.clave] ?? '-'
+                    )}
+                  </td>
+                ))}
+                <td>
+                  <select
+                    value={f.motivo_id || ''}
+                    onChange={(e) => asignarMotivo([f.id], e.target.value)}
+                  >
+                    <option value="">Sin motivo</option>
+                    {motivos.map((m) => (
+                      <option key={m.id} value={m.id}>{m.nombre}</option>
+                    ))}
+                  </select>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </Layout>
   );
 }

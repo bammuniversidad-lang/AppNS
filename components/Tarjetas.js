@@ -50,6 +50,12 @@ const TARJETAS_CONFIG = [
     ],
     claveNivel: 'ns_valor',
   },
+  {
+    titulo: 'NS Total',
+    formula: '(Valor + Cantidad + Líneas) × 30% + Pedidos × 10%',
+    claveValor: 'ns_total',
+    claveNivel: 'ns_total',
+  },
 ];
 
 function formatearValor(valor, tipo) {
@@ -59,7 +65,7 @@ function formatearValor(valor, tipo) {
   return Number(valor).toLocaleString('es-CO');
 }
 
-// Las 4 tarjetas (Pedidos, Líneas, Cantidad, Valor). Se usan en Pendientes y en el Dashboard.
+// Las 5 tarjetas (Pedidos, Líneas, Cantidad, Valor, NS Total). Se usan en Pendientes y en el Dashboard.
 export default function TarjetasResumen({ tarjetas }) {
   if (!tarjetas) return null;
   return (
@@ -67,12 +73,21 @@ export default function TarjetasResumen({ tarjetas }) {
       {TARJETAS_CONFIG.map((cfg) => (
         <div className="tarjeta" key={cfg.titulo}>
           <h3>{cfg.titulo}</h3>
-          {cfg.filas.map((f) => (
-            <div className="fila" key={f.clave}>
-              <span>{f.etiqueta}</span>
-              <b>{formatearValor(tarjetas[f.clave], f.tipo)}</b>
-            </div>
-          ))}
+
+          {cfg.claveValor ? (
+            <>
+              <p className="formula-tarjeta">{cfg.formula}</p>
+              <div className="valor-grande-tarjeta">{formatearValor(tarjetas[cfg.claveValor], 'porcentaje')}</div>
+            </>
+          ) : (
+            cfg.filas.map((f) => (
+              <div className="fila" key={f.clave}>
+                <span>{f.etiqueta}</span>
+                <b>{formatearValor(tarjetas[f.clave], f.tipo)}</b>
+              </div>
+            ))
+          )}
+
           <BarraNivel valor={tarjetas[cfg.claveNivel]} />
         </div>
       ))}

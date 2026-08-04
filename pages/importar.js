@@ -47,6 +47,46 @@ async function procesarPedidos(file, usuarioId) {
     });
   }
 
+  // Si el archivo trae columna "Motivo" (cargas históricas), se resuelve el
+  // motivo_id automáticamente: si el motivo ya existe (por nombre, sin
+  // importar mayúsculas/minúsculas) se usa ese; si no existe, se crea con
+  // el responsable indicado en esa misma fila.
+  const nombresMotivo = [...new Set(
+    filasUnicas.map((f) => f._motivo_nombre).filter((m) => m && String(m).trim() !== '')
+  )].map((m) => String(m).trim());
+
+  if (nombresMotivo.length > 0) {
+    const { data: motivosExistentes } = await supabase.from('motivos').select('id,nombre');
+    const mapaMotivos = new Map((motivosExistentes || []).map((m) => [m.nombre.toLowerCase(), m.id]));
+
+    const faltantes = nombresMotivo.filter((n) => !mapaMotivos.has(n.toLowerCase()));
+    if (faltantes.length > 0) {
+      const nuevosMotivos = faltantes.map((nombre) => {
+        const filaConEseMotivo = filasUnicas.find((f) => f._motivo_nombre && String(f._motivo_nombre).trim() === nombre);
+        return { nombre, responsable: filaConEseMotivo?.responsable_motivo?.trim() || 'Sin responsable' };
+      });
+      const { data: creados, error: errCrear } = await supabase.from('motivos').insert(nuevosMotivos).select('id,nombre');
+      if (!errCrear) {
+        (creados || []).forEach((m) => mapaMotivos.set(m.nombre.toLowerCase(), m.id));
+      } else {
+        omitidosDetalle.push({ motivo: `No se pudieron crear algunos motivos nuevos: ${errCrear.message}` });
+      }
+    }
+
+    for (const fila of filasUnicas) {
+      if (fila._motivo_nombre && String(fila._motivo_nombre).trim() !== '') {
+        const id = mapaMotivos.get(String(fila._motivo_nombre).trim().toLowerCase());
+        if (id) {
+          fila.motivo_id = id;
+          fila.motivo_asignado_en = new Date().toISOString();
+        }
+      }
+      delete fila._motivo_nombre;
+    }
+  } else {
+    filasUnicas.forEach((f) => delete f._motivo_nombre);
+  }
+
   // Se sube con "upsert ... ignoreDuplicates" para que sea la base de datos
   // (no la aplicación) la que descarte los duplicados que ya existían. Esto
   // evita tener que traer y comparar todas las llaves existentes, que era
@@ -85,15 +125,6 @@ async function procesarPedidos(file, usuarioId) {
 
   const duracionMs = Math.round(performance.now() - inicio);
   await guardarLog('pedidos', file.name, usuarioId, filasCrudas.length, insertados, omitidosDetalle, duracionMs);
-
-  if (insertados > 0) {
-    // Actualiza la clasificación Pareto (A/B/C/D) para que Pendientes y el
-    // Dashboard reflejen los pedidos recién importados. No bloquea el
-    // resultado de la importación si llegara a fallar.
-    supabase.rpc('refrescar_pareto').then(({ error }) => {
-      if (error) console.error('No se pudo refrescar la clasificación Pareto:', error.message);
-    });
-  }
 
   return { tipo: 'Pedidos', archivo: file.name, totales: filasCrudas.length, insertados, omitidosDetalle, duracionMs };
 }
@@ -187,7 +218,26 @@ async function procesarReemplazoGenerico(file, tabla, etiqueta, usuarioId) {
 }
 
 function exportarOmitidos(resultado) {
-  const hoja = XLSX.utils.json_to_sheet(resultado.omitidosDetalle);
+  // Columnas fijas y en el mismo orden siempre, sin importar si la línea se
+  // omitió por datos faltantes, por ser duplicada, o por un error al
+  // guardar — así cada fila del Excel se puede identificar claramente.
+  const filas = resultado.omitidosDetalle.map((o) => ({
+    'Motivo del descarte': o.motivo || '',
+    'Fila del archivo': o.fila ?? '',
+    'C.O.': o.co ?? '',
+    'Nro documento': o.nro_documento ?? '',
+    Bodega: o.bodega ?? '',
+    Proveedor: o.proveedor ?? '',
+    Referencia: o.referencia ?? '',
+    'Desc. item': o.desc_item ?? '',
+    'Cant. pedida': o.cant_pedida ?? '',
+    'Cant. remision': o.cant_remision ?? '',
+    'Cant. pendiente': o.cant_pendiente ?? '',
+    'Valor subtotal': o.valor_subtotal ?? '',
+    'Razon social cliente despacho': o.razon_social_cliente_despacho ?? '',
+    'Nombre vendedor': o.nombre_vendedor ?? '',
+  }));
+  const hoja = XLSX.utils.json_to_sheet(filas);
   const libro = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(libro, hoja, 'Omitidos');
   XLSX.writeFile(libro, `omitidos_${resultado.tipo}_${resultado.archivo}.xlsx`);

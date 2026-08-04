@@ -4,26 +4,30 @@ import Link from 'next/link';
 import { useAuth } from '../lib/AuthContext';
 
 const OPCIONES_MENU = [
-  { modulo: 'importar', etiqueta: 'Importar bases de datos', ruta: '/importar' },
-  { modulo: 'pendientes', etiqueta: 'Pendientes', ruta: '/pendientes' },
-  { modulo: 'dashboard', etiqueta: 'Dashboard', ruta: '/dashboard' },
+  { modulo: 'importar', etiqueta: 'Importar bases de datos', ruta: '/importar', icono: '📥' },
+  { modulo: 'pendientes', etiqueta: 'Pendientes', ruta: '/pendientes', icono: '📋' },
+  { modulo: 'dashboard', etiqueta: 'Dashboard', ruta: '/dashboard', icono: '📊' },
 ];
 
 const OPCIONES_CONFIGURACION = [
   { modulo: 'configuracion_usuarios', etiqueta: 'Usuarios', ruta: '/configuracion/usuarios' },
   { modulo: 'configuracion_motivos', etiqueta: 'Motivos', ruta: '/configuracion/motivos' },
   { modulo: 'configuracion_co', etiqueta: 'C.O.', ruta: '/configuracion/co' },
+  { modulo: 'configuracion_cierre_mes', etiqueta: 'Cierre de mes', ruta: '/configuracion/cierre-mes' },
 ];
 
-function ItemMenu({ href, children }) {
+function ItemMenu({ href, icono, children, expandido, alNavegar }) {
   const router = useRouter();
   const activo = router.pathname === href;
   return (
     <Link
       href={href}
+      onClick={alNavegar}
+      title={!expandido ? children : undefined}
       className={`item-menu ${activo ? 'item-menu-activo' : ''}`}
     >
-      {children}
+      {icono && <span className="item-menu-icono">{icono}</span>}
+      {expandido && <span>{children}</span>}
     </Link>
   );
 }
@@ -59,6 +63,7 @@ function MenuAvatar({ nombre, rol, cerrarSesion }) {
 export default function Layout({ children, tema, alternarTema, requiereModulo }) {
   const { session, profile, cargando, cerrarSesion } = useAuth();
   const router = useRouter();
+  const [expandido, setExpandido] = useState(true);
   const [configuracionAbierta, setConfiguracionAbierta] = useState(
     router.pathname.startsWith('/configuracion')
   );
@@ -95,12 +100,16 @@ export default function Layout({ children, tema, alternarTema, requiereModulo })
     : OPCIONES_CONFIGURACION.filter((o) => profile?.modulos_permitidos?.includes(o.modulo));
   const mostrarConfiguracion = opcionesConfigVisibles.length > 0;
 
+  function alNavegar() {
+    setExpandido(false);
+  }
+
   return (
     <div style={{ minHeight: '100vh' }}>
       <header className="barra-superior">
         <span className="titulo-app-barra">APLICACIÓN ABASTECIMIENTO</span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-          <button onClick={alternarTema} title="Cambiar fondo">
+          <button onClick={alternarTema} title="Cambiar fondo" className="no-imprimir">
             {tema === 'tema-claro' ? '🌙 Fondo negro' : '☀ Fondo blanco'}
           </button>
           <MenuAvatar nombre={profile?.nombre_completo} rol={profile?.rol} cerrarSesion={cerrarSesion} />
@@ -108,25 +117,42 @@ export default function Layout({ children, tema, alternarTema, requiereModulo })
       </header>
 
       <div style={{ display: 'flex' }}>
-        <aside className="barra-lateral">
-          <nav style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            <ItemMenu href="/">Inicio</ItemMenu>
+        <aside
+          className={`barra-lateral no-imprimir ${expandido ? 'barra-lateral-expandida' : 'barra-lateral-colapsada'}`}
+          onMouseLeave={() => setExpandido(false)}
+        >
+          <button
+            className="boton-hamburguesa"
+            onClick={() => setExpandido((v) => !v)}
+            title={expandido ? 'Contraer menú' : 'Expandir menú'}
+          >
+            ☰ {expandido && <span style={{ marginLeft: 8 }}>📦 Compras</span>}
+          </button>
+
+          <nav style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 8 }}>
+            <ItemMenu href="/" icono="🏠" expandido={expandido} alNavegar={alNavegar}>Inicio</ItemMenu>
             {modulosVisibles.map((o) => (
-              <ItemMenu key={o.ruta} href={o.ruta}>{o.etiqueta}</ItemMenu>
+              <ItemMenu key={o.ruta} href={o.ruta} icono={o.icono} expandido={expandido} alNavegar={alNavegar}>
+                {o.etiqueta}
+              </ItemMenu>
             ))}
 
             {mostrarConfiguracion && (
               <>
                 <button
                   className="item-menu item-menu-grupo"
-                  onClick={() => setConfiguracionAbierta((v) => !v)}
+                  title={!expandido ? 'Configuración' : undefined}
+                  onClick={() => (expandido ? setConfiguracionAbierta((v) => !v) : setExpandido(true))}
                 >
-                  Configuración {configuracionAbierta ? '▾' : '▸'}
+                  <span className="item-menu-icono">⚙️</span>
+                  {expandido && <span>Configuración {configuracionAbierta ? '▾' : '▸'}</span>}
                 </button>
-                {configuracionAbierta && (
+                {expandido && configuracionAbierta && (
                   <div style={{ display: 'flex', flexDirection: 'column', paddingLeft: 14 }}>
                     {opcionesConfigVisibles.map((o) => (
-                      <ItemMenu key={o.ruta} href={o.ruta}>{o.etiqueta}</ItemMenu>
+                      <ItemMenu key={o.ruta} href={o.ruta} expandido={expandido} alNavegar={alNavegar}>
+                        {o.etiqueta}
+                      </ItemMenu>
                     ))}
                   </div>
                 )}
@@ -134,7 +160,12 @@ export default function Layout({ children, tema, alternarTema, requiereModulo })
             )}
           </nav>
         </aside>
-        <main style={{ flexGrow: 1, padding: 20, overflowX: 'auto' }}>{children}</main>
+        <main style={{ flexGrow: 1, padding: 20, overflowX: 'auto', overflowY: 'visible', transition: 'margin 0.2s ease' }}>
+          {children}
+          <p className="no-imprimir" style={{ fontSize: 9, opacity: 0.4, marginTop: 40, textAlign: 'right' }}>
+            Compras · versión {process.env.NEXT_PUBLIC_VERSION_APP || 'dev'}
+          </p>
+        </main>
       </div>
     </div>
   );

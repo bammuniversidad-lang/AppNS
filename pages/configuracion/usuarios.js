@@ -10,6 +10,7 @@ const MODULOS_DISPONIBLES = [
   { valor: 'configuracion_usuarios', etiqueta: 'Configuración > Usuarios' },
   { valor: 'configuracion_motivos', etiqueta: 'Configuración > Motivos' },
   { valor: 'configuracion_co', etiqueta: 'Configuración > C.O.' },
+  { valor: 'configuracion_cierre_mes', etiqueta: 'Configuración > Cierre de mes' },
 ];
 
 const VACIO = {
