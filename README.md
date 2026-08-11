@@ -1356,3 +1356,26 @@ Solo reemplaza los archivos locales por los de este paquete y corre
 tabla de Pendientes ahora tiene su propio scroll interno (no crece
 indefinidamente con la página) — es el cambio necesario para que el
 encabezado fijo funcione de verdad.
+
+---
+
+## Etapa 29 (agregada) — franja de filtros por columna en Pendientes
+
+Debajo del encabezado de la tabla de Pendientes ahora hay una franja
+blanca con un campo de texto para filtrar por **Descripción del ítem,
+Referencia, Proveedor y Bodega** (si esas columnas están ocultas, su
+casilla de filtro tampoco aparece). El filtro es instantáneo: se aplica
+sobre lo que ya está cargado en pantalla, no vuelve a consultar la base
+de datos, y se puede combinar cualquier cantidad de estos 4 campos a la
+vez (por ejemplo, Proveedor + Bodega juntos).
+
+Esa franja también queda fija al desplazarte hacia abajo, justo debajo
+del encabezado — lo probé con el mismo método de navegador real que
+usé para el encabezado, confirmando que ninguna de las dos franjas se
+mueve al hacer scroll.
+
+### Cómo instalar esta actualización
+
+Solo reemplaza los archivos locales por los de este paquete y corre
+`npm run dev` (no hay cambios de base de datos). Refresco forzado
+(Ctrl+Shift+R) — debe decir "versión etapa29-...".

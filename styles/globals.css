@@ -350,6 +350,23 @@ table th {
   color: #f2f2f2;
 }
 
+.fila-filtros-columna td {
+  background-color: #ffffff;
+  position: sticky;
+  z-index: 4;
+  padding: 3px 4px;
+  border-bottom: 2px solid #999999;
+}
+
+.fila-filtros-columna input {
+  width: 100%;
+  font-size: 11px;
+  padding: 2px 4px;
+  color: #111111;
+  background-color: #ffffff;
+  border: 1px solid #bbbbbb;
+}
+
 th.ordenable {
   cursor: pointer;
 }

@@ -7,6 +7,8 @@ import { useAuth } from '../lib/AuthContext';
 import { supabase } from '../lib/supabaseClient';
 import { primerDiaMesActual, hoyISO } from '../lib/fechas';
 
+const COLUMNAS_CON_FILTRO = ['desc_item', 'referencia', 'proveedor', 'bodega'];
+
 const COLUMNAS = [
   { clave: 'co', etiqueta: 'C.O.' },
   { clave: 'fecha_actualizacion', etiqueta: 'Fecha actualización' },
@@ -215,7 +217,30 @@ export default function Pendientes({ tema, alternarTema }) {
     [columnasOcultas]
   );
 
-  const filasOrdenadas = useMemo(() => ordenarFilas(filas, orden), [filas, orden]);
+  const [filtrosColumna, setFiltrosColumna] = useState({ desc_item: '', referencia: '', proveedor: '', bodega: '' });
+  const filaEncabezadoRef = useRef(null);
+  const [altoEncabezado, setAltoEncabezado] = useState(30);
+
+  useEffect(() => {
+    if (filaEncabezadoRef.current) {
+      setAltoEncabezado(filaEncabezadoRef.current.offsetHeight);
+    }
+  }, [columnasVisibles]);
+
+  function cambiarFiltroColumna(clave, valor) {
+    setFiltrosColumna((prev) => ({ ...prev, [clave]: valor }));
+  }
+
+  const filasOrdenadas = useMemo(() => {
+    const ordenadas = ordenarFilas(filas, orden);
+    const filtrosActivos = Object.entries(filtrosColumna).filter(([, v]) => v.trim() !== '');
+    if (filtrosActivos.length === 0) return ordenadas;
+    return ordenadas.filter((f) =>
+      filtrosActivos.every(([clave, valor]) =>
+        String(f[clave] ?? '').toLowerCase().includes(valor.trim().toLowerCase())
+      )
+    );
+  }, [filas, orden, filtrosColumna]);
   const anchoTotalTabla = 32 + 160 + columnasVisibles.reduce((suma, c) => suma + (anchos[c.clave] || 140), 0);
 
   return (
@@ -294,7 +319,7 @@ export default function Pendientes({ tema, alternarTema }) {
       <div ref={scrollTabla} onScroll={sincronizarDesdeTabla} className="tabla-pagina-scroll" style={{ overflow: 'auto', maxHeight: '65vh' }}>
         <table>
           <thead>
-            <tr>
+            <tr ref={filaEncabezadoRef}>
               <th style={{ width: 32 }}></th>
               {columnasVisibles.map((c) => (
                 <ThOrdenable
@@ -308,6 +333,23 @@ export default function Pendientes({ tema, alternarTema }) {
                 />
               ))}
               <th style={{ width: 160 }}>Asignar motivo</th>
+            </tr>
+            <tr className="fila-filtros-columna">
+              <td style={{ top: altoEncabezado }}></td>
+              {columnasVisibles.map((c) => (
+                <td key={c.clave} style={{ top: altoEncabezado, width: anchos[c.clave] || 140 }}>
+                  {COLUMNAS_CON_FILTRO.includes(c.clave) && (
+                    <input
+                      type="text"
+                      placeholder={`Filtrar ${c.etiqueta.toLowerCase()}...`}
+                      value={filtrosColumna[c.clave]}
+                      onChange={(e) => cambiarFiltroColumna(c.clave, e.target.value)}
+                      style={{ width: '100%' }}
+                    />
+                  )}
+                </td>
+              ))}
+              <td style={{ top: altoEncabezado }}></td>
             </tr>
           </thead>
           <tbody>
