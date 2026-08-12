@@ -162,6 +162,23 @@ export default function Pendientes({ tema, alternarTema }) {
     });
   }
 
+  // Selecciona (o quita la selección de) exactamente lo que está visible en
+  // pantalla en este momento, respetando el rango de fechas, "solo sin
+  // motivo", y los filtros por columna — sin tocar filas que hayan quedado
+  // seleccionadas de antes y que ahora no se estén mostrando.
+  function alternarSeleccionarTodoVisible() {
+    const idsVisibles = filasOrdenadas.map((f) => f.id);
+    const todosVisiblesYaSeleccionados = idsVisibles.length > 0 && idsVisibles.every((id) => seleccionados.has(id));
+    setSeleccionados((prev) => {
+      const nuevo = new Set(prev);
+      idsVisibles.forEach((id) => {
+        if (todosVisiblesYaSeleccionados) nuevo.delete(id);
+        else nuevo.add(id);
+      });
+      return nuevo;
+    });
+  }
+
   async function asignarMotivo(idsPedidos, motivoId) {
     const motivo = motivos.find((m) => String(m.id) === String(motivoId));
     if (!motivo) return;
@@ -241,6 +258,7 @@ export default function Pendientes({ tema, alternarTema }) {
       )
     );
   }, [filas, orden, filtrosColumna]);
+  const todosVisiblesSeleccionados = filasOrdenadas.length > 0 && filasOrdenadas.every((f) => seleccionados.has(f.id));
   const anchoTotalTabla = 32 + 160 + columnasVisibles.reduce((suma, c) => suma + (anchos[c.clave] || 140), 0);
 
   return (
@@ -289,6 +307,17 @@ export default function Pendientes({ tema, alternarTema }) {
         </div>
       </details>
 
+      <div style={{ marginBottom: 10 }}>
+        <button onClick={alternarSeleccionarTodoVisible}>
+          {todosVisiblesSeleccionados ? 'Quitar selección de todo lo visible' : 'Seleccionar todo'}
+        </button>
+        <span style={{ marginLeft: 8, fontSize: 11, opacity: 0.7 }}>
+          {todosVisiblesSeleccionados
+            ? `Las ${filasOrdenadas.length} fila(s) visibles están seleccionadas.`
+            : `Selecciona las ${filasOrdenadas.length} fila(s) que se están mostrando en pantalla (respeta los filtros).`}
+        </span>
+      </div>
+
       {seleccionados.size > 0 && (
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10 }}>
           <span>{seleccionados.size} fila(s) seleccionada(s)</span>
@@ -320,7 +349,14 @@ export default function Pendientes({ tema, alternarTema }) {
         <table>
           <thead>
             <tr ref={filaEncabezadoRef}>
-              <th style={{ width: 32 }}></th>
+              <th style={{ width: 32 }}>
+                <input
+                  type="checkbox"
+                  checked={todosVisiblesSeleccionados}
+                  onChange={alternarSeleccionarTodoVisible}
+                  title="Seleccionar todo lo que se está mostrando en pantalla"
+                />
+              </th>
               {columnasVisibles.map((c) => (
                 <ThOrdenable
                   key={c.clave}

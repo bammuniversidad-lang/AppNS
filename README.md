@@ -1379,3 +1379,41 @@ mueve al hacer scroll.
 Solo reemplaza los archivos locales por los de este paquete y corre
 `npm run dev` (no hay cambios de base de datos). Refresco forzado
 (Ctrl+Shift+R) — debe decir "versión etapa29-...".
+
+---
+
+## Etapa 30 (agregada) — "Seleccionar todo" en Pendientes (respeta filtros)
+
+Se agregó la opción de seleccionar de una sola vez todas las filas que
+se están mostrando en pantalla en ese momento, en dos lugares:
+
+- Un **checkbox en la esquina del encabezado** (la misma columna donde
+  van los checkbox de cada fila).
+- Un **botón "Seleccionar todo"** justo encima de la tabla, que además
+  indica cuántas filas hay visibles.
+
+Los dos hacen lo mismo: seleccionan exactamente lo que está **visible
+en ese momento** — es decir, respetan el rango de fechas, "solo sin
+motivo", y los filtros por columna (Etapa 29). Si tenías filas
+seleccionadas de antes que ya no se están mostrando (por ejemplo,
+porque cambiaste un filtro), esas NO se pierden — "Seleccionar todo"
+solo agrega o quita lo que está a la vista, sin tocar selecciones
+anteriores por fuera del filtro actual.
+
+Al hacer clic de nuevo (con todo lo visible ya seleccionado), la acción
+se invierte: quita la selección de esas mismas filas visibles.
+
+### Cómo instalar esta actualización
+
+Solo reemplaza los archivos locales por los de este paquete y corre
+`npm run dev` (no hay cambios de base de datos). Refresco forzado
+(Ctrl+Shift+R) — debe decir "versión etapa30-...".
+
+Como ya tienes el proyecto conectado a GitHub y Vercel, recuerda que
+para publicarlo basta con:
+```bash
+git add .
+git commit -m "Agregar Seleccionar todo en Pendientes"
+git push
+```
+Vercel despliega la actualización sola en uno o dos minutos.
