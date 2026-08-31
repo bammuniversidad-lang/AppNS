@@ -1417,3 +1417,67 @@ git commit -m "Agregar Seleccionar todo en Pendientes"
 git push
 ```
 Vercel despliega la actualización sola en uno o dos minutos.
+
+---
+
+## Etapa 31 (agregada) — corrección: C.O. sin ceros a la izquierda + incidente de E/S de disco
+
+### Qué pasó (resumen del incidente)
+
+1. Se intentó importar un archivo con problemas de formato (luego
+   confirmaste que ese mismo archivo, al abrirlo en el escritorio,
+   Excel lo reportaba como dañado).
+2. Esa importación pesada agotó el **presupuesto de E/S de disco** del
+   proyecto (un cupo diario que tienen los planes pequeños de Supabase
+   para "explotar" su rendimiento por ratos cortos) — mientras ese cupo
+   estuvo en cero, hasta las consultas normales se volvieron lentas o
+   agotaban el tiempo de espera. Esto se recupera solo, con el tiempo;
+   no requiere ninguna acción tuya aparte de esperar y no volver a
+   cargar archivos pesados mientras tanto.
+3. Además, esa misma columna C.O. del archivo dañado venía guardada
+   como **número** en vez de **texto** en algunas filas. Cuando eso
+   pasa, Excel le quita los ceros a la izquierda (por ejemplo, "001" se
+   guarda como el número 1). La aplicación importó esas filas tal cual,
+   así que terminaste con C.O. duplicados: "001" por un lado y "1" por
+   otro — el mismo centro de operación partido en dos códigos distintos
+   en el filtro.
+
+### Corrección para que no se repita
+
+Se corrigió la importación de Pedidos: ahora, si el C.O. llega sin
+ceros a la izquierda (porque la celda venía como número), la aplicación
+se los vuelve a poner automáticamente antes de guardarlo.
+
+### Corrección de los datos que ya quedaron mal
+
+Se agregó `supabase/fix_normalizar_co.sql` — corrige los C.O. que ya
+quedaron sin ceros en tu base actual: si una fila con el código sin
+ceros (ej. "1") ya existía también con el código correcto (ej. "001"),
+se borra la copia mal formateada y se conserva la correcta; el resto
+simplemente se le agregan los ceros. También corrige el catálogo de
+C.O. y los C.O. permitidos de cada usuario si tenían el mismo problema.
+
+### Cómo instalar esta actualización
+
+1. Espera a que se recupere el presupuesto de E/S de disco (revisa el
+   estado en tu panel de Supabase, sección Database Health /
+   Observability) antes de ejecutar nada, para no volver a forzar el
+   proyecto mientras está bajo de rendimiento.
+2. En el **SQL Editor** de Supabase, ejecuta todo el contenido de
+   `supabase/fix_normalizar_co.sql` — revisa el resultado del primer
+   `select` (Paso 0) para ver cuántas filas estaban afectadas.
+3. Reemplaza tus archivos locales por los de este paquete.
+4. Sube el cambio a GitHub para que Vercel lo despliegue:
+   ```bash
+   git add .
+   git commit -m "Corregir C.O. sin ceros a la izquierda al importar"
+   git push
+   ```
+5. Refresco forzado (Ctrl+Shift+R) — debe decir "versión etapa31-...".
+
+### Recomendación a futuro
+
+Antes de importar un archivo, ábrelo primero en tu computador para
+confirmar que no esté dañado y que Excel lo abra sin advertencias —
+así evitas que un archivo con problemas vuelva a consumir de golpe el
+presupuesto de E/S del plan gratuito.
