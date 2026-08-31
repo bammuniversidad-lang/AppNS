@@ -7,7 +7,7 @@ import { useAuth } from '../lib/AuthContext';
 import { supabase } from '../lib/supabaseClient';
 import { primerDiaMesActual, hoyISO } from '../lib/fechas';
 
-const COLUMNAS_CON_FILTRO = ['desc_item', 'referencia', 'proveedor', 'bodega'];
+const COLUMNAS_CON_FILTRO = ['co', 'desc_item', 'referencia', 'proveedor', 'bodega'];
 
 const COLUMNAS = [
   { clave: 'co', etiqueta: 'C.O.' },
@@ -234,7 +234,7 @@ export default function Pendientes({ tema, alternarTema }) {
     [columnasOcultas]
   );
 
-  const [filtrosColumna, setFiltrosColumna] = useState({ desc_item: '', referencia: '', proveedor: '', bodega: '' });
+  const [filtrosColumna, setFiltrosColumna] = useState({ co: '', desc_item: '', referencia: '', proveedor: '', bodega: '' });
   const filaEncabezadoRef = useRef(null);
   const [altoEncabezado, setAltoEncabezado] = useState(30);
 

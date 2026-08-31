@@ -1481,3 +1481,25 @@ Antes de importar un archivo, ábrelo primero en tu computador para
 confirmar que no esté dañado y que Excel lo abra sin advertencias —
 así evitas que un archivo con problemas vuelva a consumir de golpe el
 presupuesto de E/S del plan gratuito.
+
+---
+
+## Etapa 32 (agregada) — filtro por C.O. en la franja de columnas
+
+Se agregó C.O. a la franja de filtros por columna de Pendientes (junto
+a Bodega, Proveedor, Referencia y Descripción del ítem), como pediste.
+
+### Cómo instalar esta actualización
+
+Solo reemplaza los archivos locales por los de este paquete y sube el
+cambio a GitHub (no hay cambios de base de datos):
+```powershell
+git add .
+git commit -m "Agregar filtro de C.O. en Pendientes"
+git push
+```
+(Ejecuta cada línea por separado, con Enter entre una y otra — no las
+pegues todas juntas.)
+
+Vercel despliega la actualización sola en uno o dos minutos. Refresco
+forzado (Ctrl+Shift+R) — debe decir "versión etapa32-...".
