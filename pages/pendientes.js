@@ -102,8 +102,8 @@ export default function Pendientes({ tema, alternarTema }) {
       { data: pr, error: errorPr },
     ] = await Promise.all([
       consulta.order('co', { ascending: true }).order('referencia', { ascending: true }),
-      supabase.rpc('obtener_pareto_cliente', { fecha_inicio: fechaInicio || null, fecha_fin: fechaFin || null, co_list }),
-      supabase.rpc('obtener_pareto_referencia', { fecha_inicio: fechaInicio || null, fecha_fin: fechaFin || null, co_list }),
+      supabase.rpc('obtener_clasificacion_cliente_ventas', { co_list }),
+      supabase.rpc('obtener_clasificacion_referencia_ventas', { co_list }),
     ]);
 
     if (errorPc || errorPr) {
@@ -111,12 +111,15 @@ export default function Pendientes({ tema, alternarTema }) {
     }
 
     if (!error) {
-      const mapaCliente = new Map((pc || []).map((r) => [`${r.co}||${r.cliente}`, r.clasificacion_cliente]));
-      const mapaReferencia = new Map((pr || []).map((r) => [`${r.co}||${r.item}`, r.clasificacion_referencia]));
+      const mapaCliente = new Map((pc || []).map((r) => [`${r.co}||${r.cliente_factura}||${r.sucursal_despacho}`, r.clasificacion]));
+      const mapaReferencia = new Map((pr || []).map((r) => [`${r.co}||${r.referencia}`, r.clasificacion]));
+      // La clasificación viene de las Ventas de los últimos meses (no del
+      // mes filtrado en pantalla). Si un cliente o referencia no aparece
+      // ahí (por ejemplo, es nuevo o casi no vendió), se clasifica como D.
       const filasConClasificacion = (data || []).map((f) => ({
         ...f,
-        clasificacion_cliente: mapaCliente.get(`${f.co}||${f.razon_social_cliente_despacho}`) || null,
-        clasificacion_referencia: mapaReferencia.get(`${f.co}||${f.desc_item}`) || null,
+        clasificacion_cliente: mapaCliente.get(`${f.co}||${f.cliente_factura}||${f.sucursal_despacho}`) || 'D',
+        clasificacion_referencia: mapaReferencia.get(`${f.co}||${f.referencia}`) || 'D',
       }));
       setFilas(filasConClasificacion);
     } else {

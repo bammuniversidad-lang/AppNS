@@ -216,7 +216,8 @@ create or replace view v_pendientes
   select
     p.id, p.co, p.fecha_actualizacion, p.nro_documento, p.bodega, p.proveedor,
     p.referencia, p.desc_item, p.cant_pedida, p.cant_remision, p.cant_pendiente,
-    p.valor_subtotal, p.razon_social_cliente_despacho, p.nombre_vendedor,
+    p.valor_subtotal, p.cliente_factura, p.sucursal_despacho,
+    p.razon_social_cliente_despacho, p.nombre_vendedor,
     p.motivo_id, m.nombre as motivo_nombre, p.responsable_motivo, p.motivo_asignado_en
   from pedidos p
   left join motivos m on m.id = p.motivo_id
@@ -338,6 +339,137 @@ $$;
 grant execute on function dash_filtrado_liviano(date,date,text[],text,text,text,text,text) to authenticated;
 
 -- ---------------------------------------------------------------------
+-- 5.5. Clasificación A/B/C/D calculada con Ventas de los últimos meses
+--    (no con los pedidos del mes filtrado). Un pedido grande y puntual
+--    ya no distorsiona la clasificación de un producto que en realidad
+--    casi no rota. El cálculo se hace en el navegador al importar (para
+--    no golpear el presupuesto de E/S de disco); aquí solo se guarda el
+--    resultado final.
+-- ---------------------------------------------------------------------
+create table if not exists clasificacion_cliente_ventas (
+  co text not null,
+  cliente_factura text not null,
+  sucursal_despacho text not null,
+  clasificacion text not null check (clasificacion in ('A','B','C','D')),
+  actualizado_en timestamptz not null default now(),
+  primary key (co, cliente_factura, sucursal_despacho)
+);
+
+create table if not exists clasificacion_referencia_ventas (
+  co text not null,
+  referencia text not null,
+  clasificacion text not null check (clasificacion in ('A','B','C','D')),
+  actualizado_en timestamptz not null default now(),
+  primary key (co, referencia)
+);
+
+-- Curva de Pareto (Gráfico 4) ya resumida a ~100 puntos por C.O. (más una
+-- fila especial co='__TODOS__' con todos los C.O. combinados), calculada
+-- al importar Ventas. Se guarda así — liviana — en vez del detalle
+-- completo, para no volver a golpear el almacenamiento.
+create table if not exists curva_pareto_ventas (
+  co text primary key,
+  puntos jsonb not null,
+  x_a numeric,
+  x_b numeric,
+  x_c numeric,
+  actualizado_en timestamptz not null default now()
+);
+
+alter table clasificacion_cliente_ventas enable row level security;
+alter table clasificacion_referencia_ventas enable row level security;
+alter table curva_pareto_ventas enable row level security;
+
+drop policy if exists "autenticados clasif cliente ventas" on clasificacion_cliente_ventas;
+create policy "autenticados clasif cliente ventas" on clasificacion_cliente_ventas
+  for all using (auth.role() = 'authenticated');
+
+drop policy if exists "autenticados clasif referencia ventas" on clasificacion_referencia_ventas;
+create policy "autenticados clasif referencia ventas" on clasificacion_referencia_ventas
+  for all using (auth.role() = 'authenticated');
+
+drop policy if exists "autenticados curva pareto ventas" on curva_pareto_ventas;
+create policy "autenticados curva pareto ventas" on curva_pareto_ventas
+  for all using (auth.role() = 'authenticated');
+
+-- Cierre de mes: borra la clasificación calculada, para que se vuelva a
+-- calcular con la siguiente importación de Ventas.
+create or replace function eliminar_clasificacion_ventas()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not es_administrador(auth.uid()) then
+    raise exception 'Solo un administrador puede eliminar la clasificación por ventas.';
+  end if;
+  delete from clasificacion_cliente_ventas where co is not null;
+  delete from clasificacion_referencia_ventas where co is not null;
+  delete from curva_pareto_ventas where co is not null;
+end;
+$$;
+
+grant execute on function eliminar_clasificacion_ventas() to authenticated;
+
+-- Se devuelven como un solo jsonb (no como tabla) para no toparse con el
+-- límite de 1000 filas por consulta cuando hay miles de clientes o
+-- referencias.
+create or replace function obtener_clasificacion_cliente_ventas(co_list text[] default null)
+returns jsonb
+language sql
+stable
+as $$
+  select coalesce(jsonb_agg(jsonb_build_object(
+    'co', co, 'cliente_factura', cliente_factura, 'sucursal_despacho', sucursal_despacho, 'clasificacion', clasificacion
+  )), '[]'::jsonb)
+  from clasificacion_cliente_ventas
+  where co_list is null or co = any(co_list);
+$$;
+
+create or replace function obtener_clasificacion_referencia_ventas(co_list text[] default null)
+returns jsonb
+language sql
+stable
+as $$
+  select coalesce(jsonb_agg(jsonb_build_object(
+    'co', co, 'referencia', referencia, 'clasificacion', clasificacion
+  )), '[]'::jsonb)
+  from clasificacion_referencia_ventas
+  where co_list is null or co = any(co_list);
+$$;
+
+grant execute on function obtener_clasificacion_cliente_ventas(text[]) to authenticated;
+grant execute on function obtener_clasificacion_referencia_ventas(text[]) to authenticated;
+
+-- Trae la curva del C.O. específico si hay exactamente uno filtrado; si
+-- son varios o "Todos", trae la curva combinada ('__TODOS__').
+create or replace function obtener_curva_pareto_ventas(co_list text[] default null)
+returns jsonb
+language sql
+stable
+as $$
+  select coalesce(
+    (
+      select jsonb_build_object('co', co, 'puntos', puntos, 'x_a', x_a, 'x_b', x_b, 'x_c', x_c)
+      from curva_pareto_ventas
+      where (co_list is not null and array_length(co_list, 1) = 1 and co = co_list[1])
+         or (co_list is null and co = '__TODOS__')
+      limit 1
+    ),
+    (
+      select jsonb_build_object('co', co, 'puntos', puntos, 'x_a', x_a, 'x_b', x_b, 'x_c', x_c)
+      from curva_pareto_ventas
+      where co = '__TODOS__'
+      limit 1
+    ),
+    'null'::jsonb
+  );
+$$;
+
+grant execute on function obtener_curva_pareto_ventas(text[]) to authenticated;
+
+-- ---------------------------------------------------------------------
 -- 6. Función principal del Dashboard: tarjetas + NS Total, los 6
 --    cuadros, y los 3 gráficos, todo en una sola consulta.
 -- ---------------------------------------------------------------------
@@ -364,64 +496,31 @@ as $$
       p_proveedor, p_desc_item, p_canal, p_zona, p_cross_campo, p_cross_valor
     )
   ),
-  item_agg as materialized (
-    select desc_item, sum(valor_subtotal) as valor
-    from base
-    where desc_item is not null
-    group by desc_item
-  ),
-  item_ranked as (
-    select desc_item, valor,
-      row_number() over (order by valor desc) as rn,
-      count(*) over () as total_n,
-      sum(valor) over (order by valor desc rows between unbounded preceding and current row) as acumulado,
-      sum(valor) over () as total_valor
-    from item_agg
-  ),
-  item_pct as materialized (
-    -- Un solo cálculo de participación/acumulado por ítem, que se
-    -- reutiliza para clasificar (Cuadro 8), para el filtro cruzado por
-    -- clasificación, y para la curva de Pareto (Gráfico 5) — así se
-    -- calcula una sola vez en toda la función.
-    select desc_item, rn,
-      round(rn::numeric / nullif(total_n, 0) * 100, 2) as pct_items,
-      round(acumulado / nullif(total_valor, 0) * 100, 2) as pct_valor,
-      case
-        when round(acumulado / nullif(total_valor, 0) * 100, 2) <= 80 then 'A'
-        when round(acumulado / nullif(total_valor, 0) * 100, 2) <= 95 then 'B'
-        when round(acumulado / nullif(total_valor, 0) * 100, 2) <= 99 then 'C'
-        else 'D'
-      end as clasificacion
-    from item_ranked
-  ),
-  curva_muestreada as (
-    -- Se toma un solo punto por cada entero de % de productos (el último
-    -- dentro de ese entero), para no mandar miles de puntos al navegador.
-    select distinct on (floor(pct_items)) floor(pct_items) as bucket, pct_items, pct_valor
-    from item_pct
-    order by floor(pct_items), rn desc
-  ),
-  umbrales_pareto as (
-    select
-      min(pct_items) filter (where pct_valor >= 80) as x_a,
-      min(pct_items) filter (where pct_valor >= 95) as x_b,
-      min(pct_items) filter (where pct_valor >= 99) as x_c
-    from item_pct
+  -- Clasificación estable por referencia, calculada aparte con las
+  -- Ventas de los últimos meses (Etapa 34) — no con los pedidos del
+  -- período filtrado, para que un pedido grande y puntual no distorsione
+  -- la clasificación de un producto que en realidad casi no rota.
+  clasif_ref_ventas as (
+    select co, referencia, clasificacion
+    from clasificacion_referencia_ventas
+    where p_co_list is null or co = any(p_co_list)
   ),
   -- "base_final" es la que usan todas las tarjetas, cuadros y el
   -- gráfico por C.O.: si el filtro cruzado es por clasificación de
   -- referencia, aquí se aplica (dash_filtrado no puede aplicarlo
   -- directamente porque la clasificación no es una columna de pedidos,
   -- se calcula arriba). Si no es ese el filtro cruzado, queda igual a
-  -- "base". La curva de Pareto y sus umbrales SIEMPRE usan "base" sin
-  -- este filtro, para que la curva no desaparezca al hacer clic en una
-  -- zona.
+  -- "base". La curva de Pareto (Gráfico 4) es una vista distinta a
+  -- propósito: muestra la forma de la distribución del período
+  -- filtrado, y sigue usando "base" con la clasificación calculada en
+  -- vivo (item_pct), sin este filtro, para que la curva no desaparezca
+  -- al hacer clic en una zona.
   base_final as materialized (
-    select b.*, ip.clasificacion as clasificacion_referencia
+    select b.*, coalesce(crv.clasificacion, 'D') as clasificacion_referencia
     from base b
-    left join item_pct ip on ip.desc_item = b.desc_item
+    left join clasif_ref_ventas crv on crv.co = b.co and crv.referencia = b.referencia
     where p_cross_campo is distinct from 'clasificacion_referencia'
-       or ip.clasificacion = p_cross_valor
+       or coalesce(crv.clasificacion, 'D') = p_cross_valor
   ),
   pedidos_unicos as (
     -- Reemplaza "count(distinct (co, nro_documento))": agrupar primero y
@@ -482,14 +581,18 @@ as $$
       sum(valor_subtotal) as valor,
       sum(cant_pedida) as cantidad_total,
       sum(case when cant_pedida > 0 then (valor_subtotal / cant_pedida) * cant_pendiente else 0 end) as valor_pendiente
-    from base_final group by responsable_motivo
+    from base_final
+    where cant_pendiente > 0
+    group by responsable_motivo
   ),
   por_motivo as (
     select coalesce(motivo_nombre, '(sin asignar)') as motivo,
       sum(valor_subtotal) as valor,
       sum(cant_pedida) as cantidad_total,
       sum(case when cant_pedida > 0 then (valor_subtotal / cant_pedida) * cant_pendiente else 0 end) as valor_pendiente
-    from base_final group by motivo_nombre
+    from base_final
+    where cant_pendiente > 0
+    group by motivo_nombre
   ),
   por_item as (
     select desc_item,
@@ -509,8 +612,8 @@ as $$
   ),
   por_clasificacion_referencia as (
     select
-      coalesce(clasificacion_referencia, '(sin clasificar)') as clasificacion,
-      count(distinct desc_item) as cantidad_referencias,
+      coalesce(clasificacion_referencia, 'D') as clasificacion,
+      count(distinct referencia) as cantidad_referencias,
       sum(valor_subtotal) as valor_solicitado,
       sum(case when cant_pedida > 0 then (valor_subtotal / cant_pedida) * cant_remision else 0 end) as valor_facturado,
       sum(case when cant_pedida > 0 then (valor_subtotal / cant_pedida) * cant_pendiente else 0 end) as valor_pendiente
@@ -637,14 +740,7 @@ as $$
       ) order by clasificacion), '[]'::jsonb)
       from por_clasificacion_referencia
     ),
-    'curva_pareto', (
-      select jsonb_build_object(
-        'puntos', coalesce((select jsonb_agg(jsonb_build_object('pct_items', pct_items, 'pct_valor', pct_valor) order by pct_items) from curva_muestreada), '[]'::jsonb),
-        'x_a', (select x_a from umbrales_pareto),
-        'x_b', (select x_b from umbrales_pareto),
-        'x_c', (select x_c from umbrales_pareto)
-      )
-    ),
+    'curva_pareto', obtener_curva_pareto_ventas(p_co_list),
     'grafico_co', (
       select coalesce(jsonb_agg(jsonb_build_object(
         'co', co,

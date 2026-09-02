@@ -3,14 +3,26 @@ import * as XLSX from 'xlsx';
 import Layout from '../components/Layout';
 import { useAuth } from '../lib/AuthContext';
 import { supabase } from '../lib/supabaseClient';
-import { leerArchivo, mapearFilasPedidos, mapearFilasClientes, claveUnica } from '../lib/importUtils';
+import { leerArchivo, mapearFilasPedidos, mapearFilasClientes, mapearFilasVentasClasificacion, claveUnica } from '../lib/importUtils';
 
 const TIPOS = [
   { valor: 'pedidos', etiqueta: 'Pedidos (acumulativa, valida duplicados)' },
-  { valor: 'ventas', etiqueta: 'Ventas (acumulativa)' },
-  { valor: 'inventario', etiqueta: 'Inventario (reemplaza la data existente)' },
-  { valor: 'referencias', etiqueta: 'Referencia (reemplaza la data existente)' },
-  { valor: 'entradas', etiqueta: 'Entradas (acumulativa)' },
+  {
+    valor: 'clasificacion_ventas',
+    etiqueta: 'Clasificación A/B/C/D (Ventas de los últimos meses)',
+    multiple: true,
+    ayuda: (
+      <div style={{ fontSize: 11, opacity: 0.8, marginTop: 4, maxWidth: 620 }}>
+        <b>Ruta en el ERP:</b> Ventas → Consultas y reportes → Facturas y notas por ítems → Consulta &quot;BASE ABA CLAS&quot;.<br />
+        <b>Observaciones:</b> se deben bajar los últimos 2 meses, un archivo por mes, en formato .xlsx.
+        Selecciona los 2 archivos juntos (Ctrl+clic) antes de darle Importar.<br />
+        <b>Frecuencia:</b> mensual. Cada vez que importes, se reemplaza la clasificación anterior por
+        completo con lo que traigan los archivos que subas — no se acumula histórico, y el detalle de
+        ventas nunca se guarda en la base de datos, solo el resultado (A/B/C/D) por cliente y por
+        referencia.
+      </div>
+    ),
+  },
   { valor: 'clientes', etiqueta: 'Clientes (reemplaza la data existente)' },
 ];
 
@@ -37,7 +49,6 @@ async function procesarPedidos(file, usuarioId) {
 
   const omitidosDetalle = erroresFilas.map((e) => ({ motivo: e.error, fila: e.fila }));
 
-  // Si el mismo archivo trae la misma línea repetida, nos quedamos con una sola.
   const porClave = new Map();
   for (const fila of filas) porClave.set(claveUnica(fila), fila);
   const filasUnicas = [...porClave.values()];
@@ -47,10 +58,6 @@ async function procesarPedidos(file, usuarioId) {
     });
   }
 
-  // Si el archivo trae columna "Motivo" (cargas históricas), se resuelve el
-  // motivo_id automáticamente: si el motivo ya existe (por nombre, sin
-  // importar mayúsculas/minúsculas) se usa ese; si no existe, se crea con
-  // el responsable indicado en esa misma fila.
   const nombresMotivo = [...new Set(
     filasUnicas.map((f) => f._motivo_nombre).filter((m) => m && String(m).trim() !== '')
   )].map((m) => String(m).trim());
@@ -87,10 +94,6 @@ async function procesarPedidos(file, usuarioId) {
     filasUnicas.forEach((f) => delete f._motivo_nombre);
   }
 
-  // Se sube con "upsert ... ignoreDuplicates" para que sea la base de datos
-  // (no la aplicación) la que descarte los duplicados que ya existían. Esto
-  // evita tener que traer y comparar todas las llaves existentes, que era
-  // lento y además se topaba con el límite de 1000 filas por consulta.
   let insertados = 0;
   for (let i = 0; i < filasUnicas.length; i += TAMANO_LOTE) {
     const lote = filasUnicas.slice(i, i + TAMANO_LOTE);
@@ -100,8 +103,6 @@ async function procesarPedidos(file, usuarioId) {
       .select('co,nro_documento,bodega,referencia');
 
     if (error) {
-      // Un error real (no un simple duplicado) en el lote: se reintenta
-      // fila por fila SOLO ese lote de 500, para saber cuál fila fue.
       for (const fila of lote) {
         const { error: errFila } = await supabase
           .from('pedidos')
@@ -160,67 +161,198 @@ async function procesarClientes(file, usuarioId) {
   return { tipo: 'Clientes', archivo: file.name, totales: filasCrudas.length, insertados, omitidosDetalle, duracionMs };
 }
 
-async function procesarAcumulativaGenerica(file, tabla, etiqueta, usuarioId) {
-  const inicio = performance.now();
-  const filas = await leerArchivo(file);
-  const omitidosDetalle = [];
-  const registros = filas.map((f) => ({ data: f, archivo_origen: file.name, cargado_por: usuarioId }));
+// Calcula la clasificación A/B/C/D tipo Pareto, PARTICIONADO POR C.O.
+// (cada C.O. tiene su propia clasificación independiente, igual que en
+// el resto de la aplicación — no se mezclan los C.O. entre sí). Cuando
+// se pide `conCurva`, también arma los puntos de la curva de Pareto
+// (% de productos acumulado vs. % de ventas acumulado) para ese C.O.,
+// muestreada a un punto por cada entero de % de productos, para que sea
+// liviana.
+function calcularClasificacionPareto(filas, coFn, claveFn, valorFn, conCurva) {
+  const porCo = new Map(); // co -> Map(clave -> valor)
+  for (const f of filas) {
+    const co = coFn(f);
+    const clave = claveFn(f);
+    if (!co || !clave) continue;
+    const valor = Number(valorFn(f)) || 0;
+    if (!porCo.has(co)) porCo.set(co, new Map());
+    const grupo = porCo.get(co);
+    grupo.set(clave, (grupo.get(clave) || 0) + valor);
+  }
 
-  let insertados = 0;
-  for (let i = 0; i < registros.length; i += TAMANO_LOTE) {
-    const lote = registros.slice(i, i + TAMANO_LOTE);
-    const { error } = await supabase.from(tabla).insert(lote);
-    if (error) {
-      for (let j = 0; j < lote.length; j++) {
-        const { error: errFila } = await supabase.from(tabla).insert([lote[j]]);
-        if (errFila) omitidosDetalle.push({ motivo: `Error al guardar: ${errFila.message}`, ...filas[i + j] });
-        else insertados++;
+  const clasificaciones = []; // { co, clave, clasificacion }
+  const curvas = []; // { co, puntos, x_a, x_b, x_c }
+
+  // Para armar también la curva "combinada" (Todos los C.O. juntos),
+  // usando el mismo enfoque de partición pero con un solo grupo grande.
+  const gruposParaCombinar = conCurva ? new Map() : null;
+
+  for (const [co, grupo] of porCo.entries()) {
+    const ordenado = [...grupo.entries()].sort((a, b) => b[1] - a[1]);
+    const total = ordenado.reduce((s, [, v]) => s + v, 0);
+    const totalItems = ordenado.length;
+    let acumulado = 0;
+    let xA = null;
+    let xB = null;
+    let xC = null;
+    const puntosPorEntero = new Map();
+
+    ordenado.forEach(([clave, valor], idx) => {
+      acumulado += valor;
+      const pctValor = total > 0 ? (acumulado / total) * 100 : 0;
+      const pctItems = ((idx + 1) / totalItems) * 100;
+      let clasificacion = 'D';
+      if (pctValor <= 80) clasificacion = 'A';
+      else if (pctValor <= 95) clasificacion = 'B';
+      else if (pctValor <= 99) clasificacion = 'C';
+      clasificaciones.push({ co, clave, clasificacion });
+
+      if (xA === null && pctValor >= 80) xA = Math.round(pctItems * 100) / 100;
+      if (xB === null && pctValor >= 95) xB = Math.round(pctItems * 100) / 100;
+      if (xC === null && pctValor >= 99) xC = Math.round(pctItems * 100) / 100;
+
+      if (conCurva) {
+        puntosPorEntero.set(Math.floor(pctItems), {
+          pct_items: Math.round(pctItems * 100) / 100,
+          pct_valor: Math.round(pctValor * 100) / 100,
+        });
+        gruposParaCombinar.set(`${co}||${clave}`, valor);
       }
-    } else {
-      insertados += lote.length;
+    });
+
+    if (conCurva) {
+      curvas.push({
+        co,
+        puntos: [...puntosPorEntero.values()].sort((a, b) => a.pct_items - b.pct_items),
+        x_a: xA,
+        x_b: xB,
+        x_c: xC,
+      });
     }
   }
 
-  const duracionMs = Math.round(performance.now() - inicio);
-  await guardarLog(tabla, file.name, usuarioId, filas.length, insertados, omitidosDetalle, duracionMs);
+  // Curva combinada de TODOS los C.O. juntos (para cuando el Dashboard
+  // no tiene un solo C.O. específico filtrado).
+  if (conCurva && gruposParaCombinar.size > 0) {
+    const ordenado = [...gruposParaCombinar.entries()].sort((a, b) => b[1] - a[1]);
+    const total = ordenado.reduce((s, [, v]) => s + v, 0);
+    const totalItems = ordenado.length;
+    let acumulado = 0;
+    let xA = null;
+    let xB = null;
+    let xC = null;
+    const puntosPorEntero = new Map();
+    ordenado.forEach(([, valor], idx) => {
+      acumulado += valor;
+      const pctValor = total > 0 ? (acumulado / total) * 100 : 0;
+      const pctItems = ((idx + 1) / totalItems) * 100;
+      if (xA === null && pctValor >= 80) xA = Math.round(pctItems * 100) / 100;
+      if (xB === null && pctValor >= 95) xB = Math.round(pctItems * 100) / 100;
+      if (xC === null && pctValor >= 99) xC = Math.round(pctItems * 100) / 100;
+      puntosPorEntero.set(Math.floor(pctItems), {
+        pct_items: Math.round(pctItems * 100) / 100,
+        pct_valor: Math.round(pctValor * 100) / 100,
+      });
+    });
+    curvas.push({
+      co: '__TODOS__',
+      puntos: [...puntosPorEntero.values()].sort((a, b) => a.pct_items - b.pct_items),
+      x_a: xA,
+      x_b: xB,
+      x_c: xC,
+    });
+  }
 
-  return { tipo: etiqueta, archivo: file.name, totales: filas.length, insertados, omitidosDetalle, duracionMs };
+  return { clasificaciones, curvas };
 }
 
-async function procesarReemplazoGenerico(file, tabla, etiqueta, usuarioId) {
+// Procesa 1 o más archivos de Ventas: el cálculo de la clasificación se
+// hace aquí, en el navegador, con TODAS las filas de los archivos que se
+// suban juntos (2-3 meses). Solo el resultado final (A/B/C/D por cliente
+// y por referencia, y la curva del Gráfico 4 ya resumida a ~100 puntos
+// por C.O.) se sube a Supabase — el detalle de ventas fila por fila
+// nunca se guarda, para no volver a golpear el almacenamiento ni el
+// presupuesto de E/S de disco.
+async function procesarClasificacionVentas(files, usuarioId) {
   const inicio = performance.now();
-  const filas = await leerArchivo(file);
+  const listaArchivos = Array.isArray(files) ? files : [files];
+
+  let todasLasFilas = [];
+  let totalFilasCrudas = 0;
+  for (const file of listaArchivos) {
+    const filasCrudas = await leerArchivo(file);
+    totalFilasCrudas += filasCrudas.length;
+    todasLasFilas = todasLasFilas.concat(mapearFilasVentasClasificacion(filasCrudas));
+  }
+
+  const { clasificaciones: clasifCliente } = calcularClasificacionPareto(
+    todasLasFilas.filter((f) => f.cliente_factura && f.sucursal_despacho),
+    (f) => f.co,
+    (f) => `${f.cliente_factura}||${f.sucursal_despacho}`,
+    (f) => f.costo_promedio_total,
+    false
+  );
+  const { clasificaciones: clasifReferencia, curvas } = calcularClasificacionPareto(
+    todasLasFilas.filter((f) => f.referencia),
+    (f) => f.co,
+    (f) => f.referencia,
+    (f) => f.costo_promedio_total,
+    true
+  );
+
+  const filasCliente = clasifCliente.map(({ co, clave, clasificacion }) => {
+    const [cliente_factura, sucursal_despacho] = clave.split('||');
+    return { co, cliente_factura, sucursal_despacho, clasificacion };
+  });
+  const filasReferencia = clasifReferencia.map(({ co, clave, clasificacion }) => ({ co, referencia: clave, clasificacion }));
+  const filasCurva = curvas.map(({ co, puntos, x_a, x_b, x_c }) => ({ co, puntos, x_a, x_b, x_c }));
+
   const omitidosDetalle = [];
 
-  const { error: errBorrado } = await supabase.from(tabla).delete().gt('id', 0);
-  if (errBorrado) throw errBorrado;
+  // Se reemplaza por completo (no se acumula histórico): se borra lo
+  // anterior y se sube el resultado nuevo.
+  const { error: errBorrarCliente } = await supabase.from('clasificacion_cliente_ventas').delete().not('co', 'is', null);
+  if (errBorrarCliente) throw errBorrarCliente;
+  const { error: errBorrarReferencia } = await supabase.from('clasificacion_referencia_ventas').delete().not('co', 'is', null);
+  if (errBorrarReferencia) throw errBorrarReferencia;
+  const { error: errBorrarCurva } = await supabase.from('curva_pareto_ventas').delete().not('co', 'is', null);
+  if (errBorrarCurva) throw errBorrarCurva;
 
-  const registros = filas.map((f) => ({ data: f, archivo_origen: file.name, cargado_por: usuarioId }));
   let insertados = 0;
-  for (let i = 0; i < registros.length; i += TAMANO_LOTE) {
-    const lote = registros.slice(i, i + TAMANO_LOTE);
-    const { error } = await supabase.from(tabla).insert(lote);
-    if (error) {
-      for (let j = 0; j < lote.length; j++) {
-        const { error: errFila } = await supabase.from(tabla).insert([lote[j]]);
-        if (errFila) omitidosDetalle.push({ motivo: `Error al guardar: ${errFila.message}`, ...filas[i + j] });
-        else insertados++;
-      }
-    } else {
-      insertados += lote.length;
-    }
+  for (let i = 0; i < filasCliente.length; i += TAMANO_LOTE) {
+    const lote = filasCliente.slice(i, i + TAMANO_LOTE);
+    const { error } = await supabase.from('clasificacion_cliente_ventas').insert(lote);
+    if (error) omitidosDetalle.push({ motivo: `Error guardando clasificación de clientes: ${error.message}` });
+    else insertados += lote.length;
+  }
+  for (let i = 0; i < filasReferencia.length; i += TAMANO_LOTE) {
+    const lote = filasReferencia.slice(i, i + TAMANO_LOTE);
+    const { error } = await supabase.from('clasificacion_referencia_ventas').insert(lote);
+    if (error) omitidosDetalle.push({ motivo: `Error guardando clasificación de referencias: ${error.message}` });
+    else insertados += lote.length;
+  }
+  for (const filaCurva of filasCurva) {
+    const { error } = await supabase.from('curva_pareto_ventas').insert(filaCurva);
+    if (error) omitidosDetalle.push({ motivo: `Error guardando la curva de Pareto de C.O. ${filaCurva.co}: ${error.message}` });
+    else insertados++;
   }
 
   const duracionMs = Math.round(performance.now() - inicio);
-  await guardarLog(tabla, file.name, usuarioId, filas.length, insertados, omitidosDetalle, duracionMs);
+  const nombreArchivos = listaArchivos.map((f) => f.name).join(' + ');
+  await guardarLog('clasificacion_ventas', nombreArchivos, usuarioId, totalFilasCrudas, insertados, omitidosDetalle, duracionMs);
 
-  return { tipo: etiqueta, archivo: file.name, totales: filas.length, insertados, omitidosDetalle, duracionMs };
+  return {
+    tipo: 'Clasificación (Ventas)',
+    archivo: nombreArchivos,
+    totales: totalFilasCrudas,
+    insertados,
+    omitidosDetalle,
+    duracionMs,
+    notaExtra: `${filasCliente.length} clientes y ${filasReferencia.length} referencias clasificadas, y la curva de Pareto de ${filasCurva.length - 1} C.O. (más la combinada) (a partir de ${totalFilasCrudas.toLocaleString('es-CO')} líneas de venta, que no se guardaron).`,
+  };
 }
 
 function exportarOmitidos(resultado) {
-  // Columnas fijas y en el mismo orden siempre, sin importar si la línea se
-  // omitió por datos faltantes, por ser duplicada, o por un error al
-  // guardar — así cada fila del Excel se puede identificar claramente.
   const filas = resultado.omitidosDetalle.map((o) => ({
     'Motivo del descarte': o.motivo || '',
     'Fila del archivo': o.fila ?? '',
@@ -246,23 +378,20 @@ function exportarOmitidos(resultado) {
 function procesar(tipoValor, archivo, usuarioId) {
   if (tipoValor === 'pedidos') return procesarPedidos(archivo, usuarioId);
   if (tipoValor === 'clientes') return procesarClientes(archivo, usuarioId);
-  if (tipoValor === 'ventas') return procesarAcumulativaGenerica(archivo, 'ventas', 'Ventas', usuarioId);
-  if (tipoValor === 'entradas') return procesarAcumulativaGenerica(archivo, 'entradas', 'Entradas', usuarioId);
-  if (tipoValor === 'inventario') return procesarReemplazoGenerico(archivo, 'inventario', 'Inventario', usuarioId);
-  if (tipoValor === 'referencias') return procesarReemplazoGenerico(archivo, 'referencias', 'Referencia', usuarioId);
+  if (tipoValor === 'clasificacion_ventas') return procesarClasificacionVentas(archivo, usuarioId);
   return null;
 }
 
 export default function Importar({ tema, alternarTema }) {
   const { session } = useAuth();
-  const [archivos, setArchivos] = useState({}); // { pedidos: File, ventas: File, ... }
-  const [procesando, setProcesando] = useState({}); // { pedidos: true/false, ... }
+  const [archivos, setArchivos] = useState({});
+  const [procesando, setProcesando] = useState({});
   const [resultados, setResultados] = useState([]);
   const [errores, setErrores] = useState({});
 
   async function manejarImportar(tipoValor) {
     const archivo = archivos[tipoValor];
-    if (!archivo) return;
+    if (!archivo || (Array.isArray(archivo) && archivo.length === 0)) return;
     setProcesando((p) => ({ ...p, [tipoValor]: true }));
     setErrores((e) => ({ ...e, [tipoValor]: '' }));
     try {
@@ -283,17 +412,24 @@ export default function Importar({ tema, alternarTema }) {
 
       <div className="panel-dashboard" style={{ marginBottom: 20 }}>
         {TIPOS.map((t) => (
-          <div key={t.valor} className="fila-importar">
+          <div key={t.valor} className="fila-importar" style={{ flexWrap: 'wrap' }}>
             <span className="fila-importar-etiqueta">{t.etiqueta}</span>
             <input
               type="file"
+              multiple={!!t.multiple}
               accept=".xlsx,.xls,.csv"
-              onChange={(e) => setArchivos((prev) => ({ ...prev, [t.valor]: e.target.files[0] }))}
+              onChange={(e) => setArchivos((prev) => ({ ...prev, [t.valor]: t.multiple ? Array.from(e.target.files) : e.target.files[0] }))}
             />
             <button onClick={() => manejarImportar(t.valor)} disabled={!archivos[t.valor] || procesando[t.valor]}>
               {procesando[t.valor] ? 'Procesando...' : 'Importar'}
             </button>
             {errores[t.valor] && <span className="error-text">{errores[t.valor]}</span>}
+            {t.ayuda}
+            {t.multiple && Array.isArray(archivos[t.valor]) && archivos[t.valor].length > 0 && (
+              <span style={{ fontSize: 11, opacity: 0.8, width: '100%' }}>
+                Archivos seleccionados: {archivos[t.valor].map((f) => f.name).join(', ')}
+              </span>
+            )}
           </div>
         ))}
       </div>
@@ -321,8 +457,9 @@ export default function Importar({ tema, alternarTema }) {
                 <td className="ok-text">{r.insertados}</td>
                 <td>{r.omitidosDetalle.length}</td>
                 <td>
+                  {r.notaExtra && <p style={{ fontSize: 11, opacity: 0.8, margin: '0 0 6px 0' }}>{r.notaExtra}</p>}
                   {r.omitidosDetalle.length === 0 ? (
-                    '-'
+                    r.notaExtra ? '' : '-'
                   ) : (
                     <div>
                       <details>
@@ -334,7 +471,7 @@ export default function Importar({ tema, alternarTema }) {
                         </ul>
                         {r.omitidosDetalle.length > 30 && <p style={{ opacity: 0.7 }}>Mostrando 30 de {r.omitidosDetalle.length}. Descarga el Excel para verlas todas.</p>}
                       </details>
-                      <button onClick={() => exportarOmitidos(r)}>Descargar omitidos en Excel</button>
+                      {r.tipo !== 'Clasificación (Ventas)' && <button onClick={() => exportarOmitidos(r)}>Descargar omitidos en Excel</button>}
                     </div>
                   )}
                 </td>

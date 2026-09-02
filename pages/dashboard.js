@@ -570,7 +570,7 @@ export default function Dashboard({ tema, alternarTema }) {
 
         <ErrorBoundary>
           <div className="panel-dashboard">
-            <h3>Gráfico 4: Curva de Pareto — % de productos vs. % de ventas</h3>
+            <h3>Gráfico 4: Curva de Pareto (Ventas de los últimos meses) — % de productos vs. % de ventas</h3>
             {!curvaPareto || curvaPareto.puntos.length === 0 ? (
               <p style={{ opacity: 0.7 }}>Sin datos para los filtros seleccionados.</p>
             ) : (

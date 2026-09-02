@@ -56,17 +56,19 @@ export default function CierreMes({ tema, alternarTema }) {
         if (fechaFin) q = q.lte('fecha_actualizacion', fechaFin);
         return q;
       }),
-      supabase.rpc('obtener_pareto_cliente', { fecha_inicio: fechaInicio || null, fecha_fin: fechaFin || null, co_list: null }),
-      supabase.rpc('obtener_pareto_referencia', { fecha_inicio: fechaInicio || null, fecha_fin: fechaFin || null, co_list: null }),
+      supabase.rpc('obtener_clasificacion_cliente_ventas', { co_list: null }),
+      supabase.rpc('obtener_clasificacion_referencia_ventas', { co_list: null }),
     ]);
 
-    const mapaCliente = new Map((pc || []).map((r) => [`${r.co}||${r.cliente}`, r.clasificacion_cliente]));
-    const mapaReferencia = new Map((pr || []).map((r) => [`${r.co}||${r.item}`, r.clasificacion_referencia]));
+    const mapaCliente = new Map((pc || []).map((r) => [`${r.co}||${r.cliente_factura}||${r.sucursal_despacho}`, r.clasificacion]));
+    const mapaReferencia = new Map((pr || []).map((r) => [`${r.co}||${r.referencia}`, r.clasificacion]));
 
     return datos.map((f) => ({
       ...f,
-      clasificacion_cliente: mapaCliente.get(`${f.co}||${f.razon_social_cliente_despacho}`) || null,
-      clasificacion_referencia: mapaReferencia.get(`${f.co}||${f.desc_item}`) || null,
+      // La clasificación viene de las Ventas de los últimos meses; si un
+      // cliente o referencia no aparece ahí, se clasifica como D.
+      clasificacion_cliente: mapaCliente.get(`${f.co}||${f.cliente_factura}||${f.sucursal_despacho}`) || 'D',
+      clasificacion_referencia: mapaReferencia.get(`${f.co}||${f.referencia}`) || 'D',
     }));
   }
 
@@ -146,7 +148,9 @@ export default function CierreMes({ tema, alternarTema }) {
     try {
       const { data, error } = await supabase.rpc('eliminar_todos_los_pedidos');
       if (error) throw error;
-      setMensaje(`Se eliminaron ${data} pedidos. La base quedó vacía, lista para el nuevo mes.`);
+      const { error: errorClasif } = await supabase.rpc('eliminar_clasificacion_ventas');
+      if (errorClasif) throw errorClasif;
+      setMensaje(`Se eliminaron ${data} pedidos y se borró la clasificación por ventas. La base quedó vacía, lista para el nuevo mes.`);
       setYaDescargo(false);
       setConfirmacion('');
     } catch (e) {
@@ -208,9 +212,9 @@ export default function CierreMes({ tema, alternarTema }) {
           <h3 style={{ marginTop: 0 }} className="error-text">2. Eliminar todos los pedidos (empezar mes nuevo)</h3>
           <p style={{ fontSize: 11, opacity: 0.8 }}>
             <b>Esta acción no se puede deshacer.</b> Borra TODA la tabla de Pedidos (de todos los
-            C.O. y todas las fechas, no solo el rango de arriba). Los motivos, usuarios, C.O.,
-            clientes y demás configuración NO se tocan. Asegúrate de haber descargado los dos
-            archivos primero.
+            C.O. y todas las fechas, no solo el rango de arriba) y también la clasificación A/B/C/D
+            calculada por Ventas. Los motivos, usuarios, C.O., clientes y demás configuración NO se
+            tocan. Asegúrate de haber descargado los dos archivos primero.
           </p>
           {!yaDescargo && (
             <p className="error-text" style={{ fontSize: 11 }}>

@@ -1503,3 +1503,185 @@ pegues todas juntas.)
 
 Vercel despliega la actualización sola en uno o dos minutos. Refresco
 forzado (Ctrl+Shift+R) — debe decir "versión etapa32-...".
+
+---
+
+## Etapa 33 (agregada) — Cuadros 4 y 5 solo con líneas realmente pendientes
+
+Encontraste un bug real: **Cuadro 4 (Detalle por responsable)** y
+**Cuadro 5 (Detalle por motivo)** estaban sumando TODAS las líneas del
+periodo — incluidas las que nunca tuvieron nada pendiente (ya se
+despacharon completas) — en vez de sumar solo las líneas con cantidad
+pendiente mayor a cero. Por eso el renglón "(sin asignar)" salía tan
+grande: eran en realidad todas las líneas ya completadas, que nunca
+necesitaron que se les asignara un motivo porque no tuvieron pendiente.
+
+Se corrigió para que ambos cuadros solo consideren líneas con
+`Cant. pendiente > 0` — igual a como ya funcionaban correctamente el
+Cuadro 6 (ítems con pendiente) y el Cuadro 7 (motivo + ítem). Ahora, si
+sigue apareciendo "(sin asignar)", va a ser porque de verdad hay líneas
+pendientes sin motivo asignado todavía (información útil), no por
+líneas que nunca tuvieron pendiente.
+
+### Cómo instalar esta actualización
+
+1. En el **SQL Editor** de Supabase, ejecuta todo el contenido
+   actualizado de `supabase/etapa8_migracion_consolidada.sql`.
+2. Reemplaza tus archivos locales por los de este paquete y sube el
+   cambio a GitHub:
+   ```powershell
+   git add .
+   git commit -m "Corregir Cuadros 4 y 5 para que solo cuenten lineas pendientes"
+   git push
+   ```
+   (cada línea por separado, con Enter entre una y otra).
+3. Refresco forzado (Ctrl+Shift+R) — debe decir "versión etapa33-...".
+
+---
+
+## Etapa 34 (agregada) — clasificación A/B/C/D basada en Ventas de varios meses
+
+### El problema que resuelve
+
+La clasificación A/B/C/D se calculaba con los pedidos del mismo mes que
+tuvieras filtrado. Eso la distorsionaba: un producto que casi no rota
+(naturalmente D) podía salir como A solo porque ese mes alguien montó
+un pedido grande y puntual — algo excepcional, no representativo de su
+comportamiento real.
+
+### La solución
+
+La clasificación ahora se calcula aparte, con las **Ventas de los
+últimos meses** (no los pedidos), sobre la columna **Costo promedio
+total**. Por temas del ERP, hay que bajar los meses en archivos
+separados — la aplicación deja subir varios a la vez y los combina
+antes de calcular.
+
+**Ruta en el ERP:** Ventas → Consultas y reportes → Facturas y notas
+por ítems → Consulta "BASE ABA CLAS". Bajar los últimos 2 meses, un
+archivo por mes, en formato .xlsx. Frecuencia: mensual. Esta misma
+información ya quedó como ayuda visible en la pantalla de Importar.
+
+### Cómo se calcula (y por qué no pesa)
+
+Todo el cálculo (agrupar, ordenar de mayor a menor, sacar el % acumulado,
+clasificar A ≤80% / B ≤95% / C ≤99% / D el resto) se hace **en tu
+navegador**, con los archivos que subas — nunca se manda el detalle de
+ventas a Supabase. Solo se guarda el resultado final: una tabla chica
+con el C.O. + cliente + su clasificación, y otra con el C.O. + referencia
++ su clasificación. Verifiqué el cálculo contra tu archivo de muestra: la
+suma que da coincide exactamente con el "Gran total" que trae el propio
+archivo (2.698.811.425,66 en ambos casos).
+
+**Cuando un cliente o referencia no aparece** en las ventas de esos
+meses (por ejemplo, es nuevo o casi no vendió), se clasifica como **D**
+automáticamente al cruzarlo — tal como pediste.
+
+### Dónde cambia esto en la aplicación
+
+- **Pendientes**: las columnas "Clasif. cliente" y "Clasif. referencia"
+  ahora usan esta clasificación estable, cruzando por el código del
+  cliente (Cliente factura + Sucursal) en vez del nombre, y por el
+  código de la referencia en vez de la descripción — más confiable.
+- **Cierre de mes**: los dos archivos de descarga usan la misma
+  clasificación estable. El botón "Eliminar todos los pedidos" ahora
+  también borra esta clasificación (para que se recalcule con la
+  siguiente importación de Ventas del mes nuevo).
+- **Dashboard, Cuadro 8** (Detalle por clasificación de referencia):
+  también usa esta clasificación estable.
+- **Dashboard, Gráfico 4** (curva de Pareto): a propósito, sigue
+  mostrando la distribución del período que tengas filtrado en pantalla
+  (no la clasificación estable) — es una vista distinta y
+  complementaria: mientras la clasificación estable te dice "qué tan
+  importante es este cliente/referencia en general", esta curva te
+  muestra "cómo se ve la concentración de valor en lo que estás viendo
+  ahora mismo". Si prefieres que también use la clasificación estable,
+  dímelo y lo ajusto.
+
+### La pantalla de Importar se simplificó
+
+Ahora solo hay 3 opciones: **Pedidos**, la nueva **Clasificación
+A/B/C/D (Ventas)**, y **Clientes** (esta última se mantuvo porque el
+Dashboard todavía la usa para los filtros de Canal y Zona — avísame si
+también la quieres quitar). Los tipos que nunca se llegaron a usar
+(Ventas genérica, Inventario, Referencia, Entradas) se quitaron de la
+pantalla, tal como pediste.
+
+### Cómo instalar esta actualización
+
+1. En el **SQL Editor** de Supabase, ejecuta todo el contenido
+   actualizado de `supabase/etapa8_migracion_consolidada.sql` (agrega
+   las tablas y funciones nuevas de clasificación).
+2. Reemplaza tus archivos locales por los de este paquete y sube el
+   cambio a GitHub:
+   ```powershell
+   git add .
+   git commit -m "Agregar clasificacion por ventas y simplificar importar"
+   git push
+   ```
+   (cada línea por separado, con Enter entre una y otra).
+3. Ve a **Importar bases de datos** y sube tus 2 archivos de Ventas
+   juntos (selecciónalos con Ctrl+clic) en la nueva opción de
+   clasificación, para que la tabla quede poblada por primera vez.
+4. Refresco forzado (Ctrl+Shift+R) — debe decir "versión etapa34-...".
+
+### Nota importante mientras no hayas importado Ventas todavía
+
+Hasta que hagas esa primera importación de Ventas, las tablas de
+clasificación estarán vacías — así que todo va a salir clasificado como
+D (es el comportamiento esperado para "no encontrado", no un error).
+
+---
+
+## Etapa 35 (agregada) — Gráfico 4 con la clasificación estable + corrección de un error real
+
+### Lo que pediste
+
+Que el Gráfico 4 (curva de Pareto) también use la clasificación estable
+por Ventas, en vez de la del período filtrado. Ya quedó así.
+
+### El error que encontré de paso (y corregí)
+
+Al revisar el cálculo para extenderlo a la curva, me di cuenta de que
+la clasificación por Ventas (Etapa 34) tenía un error real: estaba
+calculando el % acumulado **mezclando todos los C.O. juntos**, en vez
+de calcular cada C.O. por separado (que es como funciona el resto de la
+clasificación en toda la aplicación). Esto podía hacer que un C.O.
+pequeño quedara con casi todo en D solo por estar "compitiendo" en la
+misma bolsa que un C.O. mucho más grande.
+
+Ya corregido: verifiqué con tu archivo real que ahora cada C.O. tiene su
+propia distribución A/B/C/D independiente (por ejemplo, C.O. 001 y C.O.
+003 dan distribuciones distintas y coherentes, cada una calculada sobre
+su propio 100%).
+
+### Cómo quedó el Gráfico 4
+
+Al importar Ventas, además de la clasificación, ahora también se
+calcula y guarda una **curva de Pareto ya resumida** (~100 puntos) por
+cada C.O., más una curva "combinada" con todos los C.O. juntos. Lo
+comprobé con tu archivo real: las 10 curvas juntas (9 C.O. + la
+combinada) pesan en total 30.6 KB — nada pesado.
+
+El Dashboard ahora muestra:
+- Si filtras un **C.O. específico**: la curva de ese C.O.
+- Si filtras **Todos** (o varios C.O.): la curva combinada.
+
+### Cómo instalar esta actualización
+
+1. En el **SQL Editor** de Supabase, ejecuta todo el contenido
+   actualizado de `supabase/etapa8_migracion_consolidada.sql` (agrega
+   la tabla de la curva y quita el cálculo en vivo que ya no se usa).
+2. Reemplaza tus archivos locales por los de este paquete y sube el
+   cambio a GitHub:
+   ```powershell
+   git add .
+   git commit -m "Grafico 4 con clasificacion estable y correccion de particion por C.O."
+   git push
+   ```
+   (cada línea por separado).
+3. **Importante**: vuelve a importar tus 2 archivos de Ventas en
+   Importar bases de datos, para que la clasificación y la curva se
+   recalculen con la corrección (la que ya tenías cargada quedó con el
+   error de mezclar los C.O.).
+4. Refresco forzado (Ctrl+Shift+R) — debe decir "versión etapa35-...".
