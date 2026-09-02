@@ -834,4 +834,13 @@ $$;
 
 grant execute on function eliminar_todos_los_pedidos() to authenticated;
 
+-- ---------------------------------------------------------------------
+-- 10. Corrección de datos ya cargados: quitar espacios sobrantes en
+--    Cliente factura y Sucursal despacho (si el archivo original los
+--    traía así, esos espacios impedían que la Clasificación Cliente
+--    cruzara bien contra la tabla de Ventas, y todo salía como D).
+-- ---------------------------------------------------------------------
+update pedidos set cliente_factura = trim(cliente_factura) where cliente_factura is not null and cliente_factura <> trim(cliente_factura);
+update pedidos set sucursal_despacho = trim(sucursal_despacho) where sucursal_despacho is not null and sucursal_despacho <> trim(sucursal_despacho);
+
 notify pgrst, 'reload schema';

@@ -60,14 +60,14 @@ export default function CierreMes({ tema, alternarTema }) {
       supabase.rpc('obtener_clasificacion_referencia_ventas', { co_list: null }),
     ]);
 
-    const mapaCliente = new Map((pc || []).map((r) => [`${r.co}||${r.cliente_factura}||${r.sucursal_despacho}`, r.clasificacion]));
+    const mapaCliente = new Map((pc || []).map((r) => [`${r.co}||${String(r.cliente_factura).trim()}||${String(r.sucursal_despacho).trim()}`, r.clasificacion]));
     const mapaReferencia = new Map((pr || []).map((r) => [`${r.co}||${r.referencia}`, r.clasificacion]));
 
     return datos.map((f) => ({
       ...f,
       // La clasificación viene de las Ventas de los últimos meses; si un
       // cliente o referencia no aparece ahí, se clasifica como D.
-      clasificacion_cliente: mapaCliente.get(`${f.co}||${f.cliente_factura}||${f.sucursal_despacho}`) || 'D',
+      clasificacion_cliente: mapaCliente.get(`${f.co}||${String(f.cliente_factura).trim()}||${String(f.sucursal_despacho).trim()}`) || 'D',
       clasificacion_referencia: mapaReferencia.get(`${f.co}||${f.referencia}`) || 'D',
     }));
   }

@@ -111,14 +111,14 @@ export default function Pendientes({ tema, alternarTema }) {
     }
 
     if (!error) {
-      const mapaCliente = new Map((pc || []).map((r) => [`${r.co}||${r.cliente_factura}||${r.sucursal_despacho}`, r.clasificacion]));
+      const mapaCliente = new Map((pc || []).map((r) => [`${r.co}||${String(r.cliente_factura).trim()}||${String(r.sucursal_despacho).trim()}`, r.clasificacion]));
       const mapaReferencia = new Map((pr || []).map((r) => [`${r.co}||${r.referencia}`, r.clasificacion]));
       // La clasificación viene de las Ventas de los últimos meses (no del
       // mes filtrado en pantalla). Si un cliente o referencia no aparece
       // ahí (por ejemplo, es nuevo o casi no vendió), se clasifica como D.
       const filasConClasificacion = (data || []).map((f) => ({
         ...f,
-        clasificacion_cliente: mapaCliente.get(`${f.co}||${f.cliente_factura}||${f.sucursal_despacho}`) || 'D',
+        clasificacion_cliente: mapaCliente.get(`${f.co}||${String(f.cliente_factura).trim()}||${String(f.sucursal_despacho).trim()}`) || 'D',
         clasificacion_referencia: mapaReferencia.get(`${f.co}||${f.referencia}`) || 'D',
       }));
       setFilas(filasConClasificacion);

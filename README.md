@@ -1685,3 +1685,58 @@ El Dashboard ahora muestra:
    recalculen con la corrección (la que ya tenías cargada quedó con el
    error de mezclar los C.O.).
 4. Refresco forzado (Ctrl+Shift+R) — debe decir "versión etapa35-...".
+
+---
+
+## Etapa 36 (agregada) — corrección: Clasificación Cliente salía toda en D
+
+### La causa
+
+El cruce de Clasificación Cliente se hace por **Cliente factura +
+Sucursal despacho** (código, no nombre). El archivo de Ventas ya venía
+con espacios sobrantes al final de esos campos, y eso ya lo
+corregíamos al importar Ventas — pero **nunca se corrigió en la
+importación de Pedidos**. Resultado: en Pedidos, "Cliente factura"
+quedaba con espacios (ej. `"900464714      "`), y en la clasificación
+por Ventas quedaba sin ellos (`"900464714"`) — nunca coincidían
+exactamente, así que todo caía en "no encontrado" → D.
+
+### La corrección
+
+1. La importación de Pedidos ahora también recorta los espacios de
+   Cliente factura y Sucursal despacho (para futuras importaciones).
+2. Se agregó una corrección para los pedidos que ya tienes cargados
+   (les quita los espacios sobrantes a esos dos campos).
+3. Por seguridad extra, el cruce en Pendientes y Cierre de mes ahora
+   también recorta espacios al comparar, así que aunque algún dato
+   traiga espacios de más, el cruce igual funciona.
+
+### Sobre cómo se agrupa el Pareto de cliente
+
+Mencionaste "C.O. & Razón social cliente & Valor subtotal" — así era
+como funcionaba originalmente (con los pedidos del mismo mes). Desde la
+Etapa 34, por tu propia solicitud, el Pareto de cliente se calcula con
+las **Ventas de los últimos meses** (no con los pedidos), agrupando por
+**C.O. + Cliente factura + Sucursal despacho** (código, más confiable
+que el nombre) sobre la columna **Costo promedio total** — así un
+pedido grande y puntual no distorsiona la clasificación. Si en realidad
+quieres volver al método anterior (por nombre y Valor subtotal, sobre
+los pedidos del mes), dímelo y lo ajusto — pero antes de eso, prueba
+esta corrección, porque es muy probable que el problema real fuera
+solo el desajuste de espacios.
+
+### Cómo instalar esta actualización
+
+1. En el **SQL Editor** de Supabase, ejecuta todo el contenido
+   actualizado de `supabase/etapa8_migracion_consolidada.sql` (corrige
+   los espacios en los pedidos ya cargados).
+2. Reemplaza tus archivos locales por los de este paquete y sube el
+   cambio a GitHub:
+   ```powershell
+   git add .
+   git commit -m "Corregir espacios en Cliente factura y Sucursal despacho"
+   git push
+   ```
+   (cada línea por separado).
+3. Refresco forzado (Ctrl+Shift+R) — debe decir "versión etapa36-...".
+   No hace falta volver a importar Ventas esta vez, solo correr el SQL.
