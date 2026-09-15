@@ -49,52 +49,59 @@ export default function CierreMes({ tema, alternarTema }) {
   const esAdmin = profile?.rol === 'administrador';
 
   async function obtenerFilasConClasificacion() {
-    const [datos, { data: pc }, { data: pr }] = await Promise.all([
+    const [datos, { data: pr }] = await Promise.all([
       obtenerTodo(() => {
         let q = supabase.from('v_pedidos_dashboard').select('*');
         if (fechaInicio) q = q.gte('fecha_actualizacion', fechaInicio);
         if (fechaFin) q = q.lte('fecha_actualizacion', fechaFin);
         return q;
       }),
-      supabase.rpc('obtener_clasificacion_cliente_ventas', { co_list: null }),
       supabase.rpc('obtener_clasificacion_referencia_ventas', { co_list: null }),
     ]);
 
-    const mapaCliente = new Map((pc || []).map((r) => [`${r.co}||${String(r.cliente_factura).trim()}||${String(r.sucursal_despacho).trim()}`, r.clasificacion]));
     const mapaReferencia = new Map((pr || []).map((r) => [`${r.co}||${r.referencia}`, r.clasificacion]));
 
     return datos.map((f) => ({
       ...f,
-      // La clasificación viene de las Ventas de los últimos meses; si un
-      // cliente o referencia no aparece ahí, se clasifica como D.
-      clasificacion_cliente: mapaCliente.get(`${f.co}||${String(f.cliente_factura).trim()}||${String(f.sucursal_despacho).trim()}`) || 'D',
+      // ABCD es la clasificación del producto (Referencia), calculada con
+      // las Ventas de los últimos meses. Si la referencia no aparece ahí,
+      // se clasifica como D.
       clasificacion_referencia: mapaReferencia.get(`${f.co}||${f.referencia}`) || 'D',
     }));
   }
 
+  // Misma estructura de columnas, en el mismo orden, que ya usabas antes
+  // (incluye "yave" y "validacion" igual que tu archivo de referencia:
+  // yave = Nro documento + Referencia; validacion = "FALTA" si la línea
+  // no tiene motivo asignado, o el mismo valor de "yave" si ya lo tiene).
   function filaParaExcel(f) {
+    const tienePendiente = Number(f.cant_pendiente) > 0;
+    const yave = `${f.nro_documento || ''}${f.referencia || ''}`;
+    const valorPendiente = Number(f.cant_pedida) > 0 ? (Number(f.valor_subtotal) / Number(f.cant_pedida)) * Number(f.cant_pendiente) : 0;
     return {
       'C.O.': f.co,
       Fecha: f.fecha,
-      'Fecha actualizacion': f.fecha_actualizacion,
+      'Fecha actualización': f.fecha_actualizacion,
       'Nro documento': f.nro_documento,
       Bodega: f.bodega,
       PROVEEDOR: f.proveedor,
       Referencia: f.referencia,
       'Desc. item': f.desc_item,
-      'Cant. pedida': f.cant_pedida,
-      'Cant. remision': f.cant_remision,
-      'Cant. pendiente': f.cant_pendiente,
+      'Cant, pedida': f.cant_pedida,
+      'Cant, remision': f.cant_remision,
+      'Cant, pendiente': f.cant_pendiente,
       'Valor subtotal': f.valor_subtotal,
-      'Cliente factura': f.cliente_factura,
-      'Razon social cliente despacho': f.razon_social_cliente_despacho,
+      'Desc. sucursal despacho': f.cliente_factura,
+      'Razón social cliente despacho': f.razon_social_cliente_despacho,
       'Nombre vendedor': f.nombre_vendedor,
-      CANAL: f.canal,
-      'Sucursal despacho': f.sucursal_despacho,
-      'Clasificacion cliente': f.clasificacion_cliente,
-      'Clasificacion referencia': f.clasificacion_referencia,
-      Motivo: f.motivo_nombre,
-      Responsable: f.responsable_motivo,
+      SUCURSAL: f.sucursal_despacho,
+      Observaciones: tienePendiente ? 'PENDIENTE' : 'COMPLETO',
+      yave,
+      validacion: f.motivo_nombre ? yave : 'FALTA',
+      'Valor Pendiente': valorPendiente,
+      MOTIVO: f.motivo_nombre || '',
+      RESPONSABLE: f.responsable_motivo || '',
+      ABCD: f.clasificacion_referencia,
     };
   }
 

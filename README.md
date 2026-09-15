@@ -1740,3 +1740,46 @@ solo el desajuste de espacios.
    (cada línea por separado).
 3. Refresco forzado (Ctrl+Shift+R) — debe decir "versión etapa36-...".
    No hace falta volver a importar Ventas esta vez, solo correr el SQL.
+
+---
+
+## Etapa 37 (agregada) — los dos archivos de Cierre de mes con tu estructura exacta
+
+Reescribí las columnas de los dos archivos que se descargan desde
+**Configuración > Cierre de mes** para que coincidan exactamente con la
+estructura de tus archivos de referencia (columna por columna, mismo
+orden, mismos nombres — incluida la coma en "Cant, pedida" tal como la
+traías):
+
+`C.O. | Fecha | Fecha actualización | Nro documento | Bodega | PROVEEDOR |
+Referencia | Desc. item | Cant, pedida | Cant, remision | Cant, pendiente |
+Valor subtotal | Desc. sucursal despacho | Razón social cliente despacho |
+Nombre vendedor | SUCURSAL | Observaciones | yave | validacion |
+Valor Pendiente | MOTIVO | RESPONSABLE | ABCD`
+
+Columnas calculadas (a partir de tus mismos ejemplos):
+- **Observaciones**: "PENDIENTE" si la línea tiene cantidad pendiente, "COMPLETO" si no.
+- **yave**: Nro documento + Referencia, pegados.
+- **validacion**: si la línea no tiene motivo asignado, "FALTA"; si ya lo
+  tiene, el mismo valor de "yave".
+- **Valor Pendiente**: (Valor subtotal ÷ Cant. pedida) × Cant. pendiente.
+- **ABCD**: la clasificación del producto (Referencia), la misma que se
+  calcula con las Ventas de los últimos meses (Etapa 34/35/36) — ya no
+  se incluye una columna aparte de clasificación de cliente, tal como
+  pediste.
+
+Probé la función con una fila real de tu propio archivo de ejemplo
+(`PENDIENTES_08-2026.xlsx`) y el resultado coincidió exactamente, campo
+por campo, con la fila original — incluido el "yave" y el "validacion".
+
+### Cómo instalar esta actualización
+
+Solo reemplaza los archivos locales por los de este paquete y sube el
+cambio a GitHub (no hay cambios de base de datos):
+```powershell
+git add .
+git commit -m "Igualar estructura de columnas en exportacion de Cierre de mes"
+git push
+```
+(cada línea por separado). Refresco forzado (Ctrl+Shift+R) — debe decir
+"versión etapa37-...".
