@@ -1783,3 +1783,29 @@ git push
 ```
 (cada línea por separado). Refresco forzado (Ctrl+Shift+R) — debe decir
 "versión etapa37-...".
+
+---
+
+## Etapa 38 (agregada) — fechas en formato día/mes/año en Cierre de mes
+
+Las columnas "Fecha" y "Fecha actualización" de los dos archivos de
+Cierre de mes venían en formato año-mes-día (como las guarda la base de
+datos). Ahora se convierten a **día/mes/año** (ej. `01/08/2026`) antes
+de escribirlas en el Excel, en ambos archivos.
+
+### Cómo instalar esta actualización
+
+Solo reemplaza los archivos locales por los de este paquete y sube el
+cambio a GitHub (no hay cambios de base de datos):
+```powershell
+git add .
+git commit -m "Formatear fechas a dd/mm/aaaa en exportacion de Cierre de mes"
+git push
+```
+(cada línea por separado). Refresco forzado (Ctrl+Shift+R) — debe decir
+"versión etapa38-...".
+
+Recuerda: para que Git detecte los cambios, primero tienes que copiar
+y **reemplazar** los archivos de este zip encima de tu carpeta
+`compras-app` local — si `git status` no muestra nada, es señal de que
+los archivos no se llegaron a copiar.

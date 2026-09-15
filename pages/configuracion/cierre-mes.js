@@ -34,6 +34,14 @@ function nombreMesNumero(fechaISO) {
   return `${mes}-${anio}`;
 }
 
+// "2026-08-01" -> "01/08/2026"
+function formatearFechaDDMMAAAA(fechaISO) {
+  if (!fechaISO) return '';
+  const [anio, mes, dia] = String(fechaISO).slice(0, 10).split('-');
+  if (!anio || !mes || !dia) return fechaISO;
+  return `${dia}/${mes}/${anio}`;
+}
+
 export default function CierreMes({ tema, alternarTema }) {
   const { profile } = useAuth();
   const [fechaInicio, setFechaInicio] = useState(primerDiaMesActual());
@@ -80,8 +88,8 @@ export default function CierreMes({ tema, alternarTema }) {
     const valorPendiente = Number(f.cant_pedida) > 0 ? (Number(f.valor_subtotal) / Number(f.cant_pedida)) * Number(f.cant_pendiente) : 0;
     return {
       'C.O.': f.co,
-      Fecha: f.fecha,
-      'Fecha actualización': f.fecha_actualizacion,
+      Fecha: formatearFechaDDMMAAAA(f.fecha),
+      'Fecha actualización': formatearFechaDDMMAAAA(f.fecha_actualizacion),
       'Nro documento': f.nro_documento,
       Bodega: f.bodega,
       PROVEEDOR: f.proveedor,
