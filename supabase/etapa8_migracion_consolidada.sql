@@ -238,6 +238,24 @@ create or replace view v_pedidos_dashboard
 -- ---------------------------------------------------------------------
 -- 5. Función interna de filtros compartidos por el Dashboard.
 -- ---------------------------------------------------------------------
+-- IMPORTANTE (Etapa 39b): esta función va en `language sql`, NO
+-- `plpgsql`, aunque el cuerpo sea idéntico a un simple SELECT. Se probó
+-- en vivo (EXPLAIN ANALYZE contra la base real, con 180.325 filas en
+-- septiembre) que en `plpgsql` Postgres NO PUEDE "mirar adentro" de la
+-- función al planear la consulta que la usa (dashboard_completo) — le
+-- asigna una estimación genérica de 1000 filas sin importar cuántas
+-- traiga en realidad. dashboard_completo() apila más de 15 agrupaciones
+-- distintas (por proveedor, por vendedor, por cliente, por día, etc.)
+-- encima del resultado de esta función; con la estimación de 1000 filas,
+-- cada una de esas agrupaciones reserva memoria de trabajo pensada para
+-- una tabla pequeña y termina derramando a disco una y otra vez al
+-- toparse con las 180.325 filas reales — eso es lo que agotaba los
+-- 15-30 segundos de timeout al filtrar "todo el mes".
+-- En `language sql`, en cambio, Postgres puede insertar ("inlinear") el
+-- cuerpo de esta función directamente en el plan de dashboard_completo(),
+-- así que usa las estadísticas reales de la tabla `pedidos` desde el
+-- principio, igual que ya hacía dash_filtrado_liviano() (que siempre
+-- estuvo en `language sql` y nunca tuvo este problema).
 create or replace function dash_filtrado(
   p_fecha_inicio date, p_fecha_fin date, p_co_list text[],
   p_razon_social_sucursal text, p_vendedor text, p_proveedor text, p_desc_item text,
@@ -250,11 +268,9 @@ returns table (
   proveedor text, nombre_vendedor text, razon_social_cliente_despacho text,
   motivo_nombre text, responsable_motivo text, fecha_actualizacion date
 )
-language plpgsql
+language sql
 stable
 as $$
-begin
-  return query
   select p.co, p.referencia, p.nro_documento, p.desc_item, p.cant_pedida, p.cant_remision,
          p.cant_pendiente, p.valor_subtotal, p.proveedor, p.nombre_vendedor,
          p.razon_social_cliente_despacho, m.nombre, p.responsable_motivo, p.fecha_actualizacion
@@ -285,7 +301,6 @@ begin
       -- todo y dashboard_completo() la aplica después de clasificar.
       or (p_cross_campo = 'clasificacion_referencia')
     );
-end;
 $$;
 
 grant execute on function dash_filtrado(date,date,text[],text,text,text,text,text,text,text,text) to authenticated;
@@ -793,10 +808,14 @@ $$;
 --    miles de filas), Postgres se queda sin memoria para ordenar y
 --    agrupar, y termina usando el disco en su lugar — mucho más lento.
 --    Con más memoria, esas operaciones se hacen en RAM.
+--    (Etapa 39b: subido de 64MB a 128MB — con 180.325 filas reales en un
+--    solo mes, materializar la base completa del Dashboard se queda
+--    corta con 64MB. El fix principal de este turno es otro (dash_filtrado
+--    pasó de plpgsql a sql, más arriba) — esto es margen adicional.)
 -- ---------------------------------------------------------------------
 do $$
 begin
-  execute 'alter role authenticator set work_mem = ''64MB''';
+  execute 'alter role authenticator set work_mem = ''128MB''';
 exception when others then
   raise notice 'No se pudo ajustar el work_mem automáticamente (%). Hazlo desde Project Settings > Database si lo necesitas.', sqlerrm;
 end;

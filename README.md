@@ -1906,3 +1906,63 @@ dime y reviso el plan de la consulta directamente (`EXPLAIN ANALYZE`)
 para buscar otra causa — pero este patrón (Cierre de mes + estadísticas
 viejas) es, con datos tan pequeños, la explicación más probable con
 diferencia.
+
+---
+
+## Etapa 39b (agregada) — causa raíz real del timeout: `dash_filtrado` en `plpgsql` en vez de `sql`
+
+La Etapa 39 (ANALYZE + autovacuum) no fue suficiente — el Dashboard seguía
+haciendo timeout al filtrar "todo el mes". Se diagnosticó en vivo contra la
+base real, corriendo `EXPLAIN (ANALYZE, BUFFERS)` directamente sobre las
+funciones del Dashboard en el SQL Editor.
+
+### Lo que reveló el diagnóstico
+
+- `pedidos` tiene **180.325 filas** en septiembre (los "61 pedidos" que se
+  habían mencionado antes eran pedidos *únicos* — la tabla de líneas es
+  mucho más grande).
+- `dash_filtrado_liviano(...)` (ya estaba en `language sql`): el plan
+  estimó **180.325 filas** — exacto.
+- `dash_filtrado(...)` (la que sí junta con `clientes`/`motivos`, en
+  `language plpgsql`): el plan estimó solo **1000 filas** — 180 veces
+  menos de lo real.
+
+### Causa raíz
+
+Postgres no puede "mirar adentro" de una función `plpgsql` al planear la
+consulta que la usa — le asigna una estimación genérica de 1000 filas sin
+importar cuántas traiga en realidad. `dashboard_completo()` apila más de
+15 agrupaciones distintas (por proveedor, por vendedor, por cliente, por
+día, etc.) sobre el resultado de `dash_filtrado()`; con la estimación de
+1000 filas, cada una de esas agrupaciones reservaba memoria de trabajo
+pensada para una tabla pequeña y terminaba derramando a disco una y otra
+vez al toparse con las 180.325 filas reales — eso agotaba los 15-30
+segundos de timeout.
+
+Una función en `language sql` (con un solo `SELECT`, sin nada específico
+de `plpgsql`) sí se puede "inlinear": Postgres inserta su cuerpo
+directamente en el plan de la consulta que la usa, y desde ahí planea con
+las estadísticas reales de la tabla — exactamente lo que ya hacía
+`dash_filtrado_liviano()`, y por eso nunca tuvo este problema.
+
+### Fix
+
+- `dash_filtrado()` pasó de `language plpgsql` a `language sql` (el
+  cuerpo es idéntico, solo se quitó el `begin return query ... end;` que
+  ya no hace falta).
+- `work_mem` subido de 64MB a 128MB (margen adicional, no la corrección
+  principal).
+
+### Cómo instalar esta actualización
+
+Corre el script completo de `supabase/etapa8_migracion_consolidada.sql`
+en el SQL Editor de Supabase (como siempre, es acumulativo y seguro de
+re-ejecutar — no hace falta repetir el `VACUUM` de la Etapa 39, ese ya
+quedó hecho). Luego:
+```powershell
+git add .
+git commit -m "Corregir causa raiz del timeout del Dashboard: dash_filtrado a language sql"
+git push
+```
+(cada línea por separado). Refresco forzado (Ctrl+Shift+R) — debe decir
+"versión etapa39b-...".
