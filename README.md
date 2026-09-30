@@ -1966,3 +1966,49 @@ git push
 ```
 (cada línea por separado). Refresco forzado (Ctrl+Shift+R) — debe decir
 "versión etapa39b-...".
+
+---
+
+## Etapa 39c (agregada) — evitar recorridos repetidos sobre las 180.000 filas
+
+Con el fix de la Etapa 39b, el Dashboard ya deja de "colgarse" (antes no
+terminaba nunca), pero seguía tardando entre 7 y 13 segundos con "todo el
+mes" — justo en el límite de lo que la aplicación tolera. Corriendo
+`EXPLAIN ANALYZE` del interior completo de `dashboard_completo()` se vio
+que los cuadros de **Responsable, Motivo, Ítem y Motivo+Ítem** cada uno
+filtraba `cant_pendiente > 0` **por separado** — es decir, recorrían las
+180.325 filas de la base 4 veces solo para terminar quedándose, cada vez,
+con el mismo puñado de filas (~5.131, las que sí tienen algo pendiente).
+
+### Fix
+
+Se agregó una CTE `base_pendiente` que aplica ese filtro **una sola vez**,
+y los 4 cuadros ahora la reutilizan en vez de volver a filtrar la tabla
+completa cada uno. El resultado es idéntico — es el mismo filtro, solo que
+aplicado una vez en vez de cuatro.
+
+### Nota sobre el rendimiento en general
+
+Al medir esto también quedó claro que parte de la lentitud no es del
+código sino del servidor: el mismo recorrido de la tabla, en pruebas
+consecutivas, tardó entre 60ms y casi 5 segundos — una diferencia de más
+de 60 veces para exactamente la misma operación. Eso apunta a que el plan
+gratuito/Nano de Supabase (CPU compartida entre varios proyectos) responde
+de forma variable según la carga del momento, algo que ningún cambio en
+el código de esta aplicación puede controlar del todo. Este fix reduce el
+trabajo real que hace la consulta, pero si el Dashboard ocasionalmente
+sigue tardando en momentos de mucha carga del servidor compartido, esa es
+la razón — no haría falta seguir ajustando la consulta, sino considerar
+más adelante un plan con cómputo dedicado.
+
+### Cómo instalar esta actualización
+
+Corre el script completo de `supabase/etapa8_migracion_consolidada.sql`
+en el SQL Editor de Supabase. Luego:
+```powershell
+git add .
+git commit -m "Evitar recorridos repetidos en dashboard_completo (cuadros con pendiente)"
+git push
+```
+(cada línea por separado). Refresco forzado (Ctrl+Shift+R) — debe decir
+"versión etapa39c-...".

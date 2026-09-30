@@ -591,13 +591,22 @@ as $$
       sum(case when cant_pedida > 0 then (valor_subtotal / cant_pedida) * cant_remision else 0 end) as valor_facturado
     from base_final group by razon_social_cliente_despacho
   ),
+  -- Etapa 39c: Responsable, Motivo, Ítem y Motivo+Ítem comparten el mismo
+  -- filtro "cant_pendiente > 0" — antes cada uno lo aplicaba por su
+  -- cuenta, recorriendo las 180.000+ filas de base_final 4 VECES para
+  -- terminar quedándose con solo un puñado de filas (las que sí tienen
+  -- pendiente). Filtrando una sola vez aquí y reusando el resultado ya
+  -- chico en los 4 cuadros de abajo, se evitan 3 recorridos completos de
+  -- más sobre la tabla grande.
+  base_pendiente as materialized (
+    select * from base_final where cant_pendiente > 0
+  ),
   por_responsable as (
     select coalesce(responsable_motivo, '(sin asignar)') as responsable,
       sum(valor_subtotal) as valor,
       sum(cant_pedida) as cantidad_total,
       sum(case when cant_pedida > 0 then (valor_subtotal / cant_pedida) * cant_pendiente else 0 end) as valor_pendiente
-    from base_final
-    where cant_pendiente > 0
+    from base_pendiente
     group by responsable_motivo
   ),
   por_motivo as (
@@ -605,24 +614,21 @@ as $$
       sum(valor_subtotal) as valor,
       sum(cant_pedida) as cantidad_total,
       sum(case when cant_pedida > 0 then (valor_subtotal / cant_pedida) * cant_pendiente else 0 end) as valor_pendiente
-    from base_final
-    where cant_pendiente > 0
+    from base_pendiente
     group by motivo_nombre
   ),
   por_item as (
     select desc_item,
       sum(cant_pendiente) as cantidad_pendiente,
       sum(case when cant_pedida > 0 then (valor_subtotal / cant_pedida) * cant_pendiente else 0 end) as valor_pendiente
-    from base_final
-    where cant_pendiente > 0
+    from base_pendiente
     group by desc_item
   ),
   por_motivo_item as (
     select coalesce(motivo_nombre, '(sin asignar)') as motivo, desc_item,
       sum(cant_pendiente) as cantidad_pendiente,
       sum(case when cant_pedida > 0 then (valor_subtotal / cant_pedida) * cant_pendiente else 0 end) as valor_pendiente
-    from base_final
-    where cant_pendiente > 0
+    from base_pendiente
     group by motivo_nombre, desc_item
   ),
   por_clasificacion_referencia as (
