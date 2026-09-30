@@ -1809,3 +1809,100 @@ Recuerda: para que Git detecte los cambios, primero tienes que copiar
 y **reemplazar** los archivos de este zip encima de tu carpeta
 `compras-app` local — si `git status` no muestra nada, es señal de que
 los archivos no se llegaron a copiar.
+
+---
+
+## Etapa 39 (agregada) — Dashboard lento/timeout al filtrar "todo el mes" (con pocos pedidos)
+
+### Reporte del usuario
+
+> en el dashoard si pongo un dia me carga sin lio, pero cuando pongo todo
+> el mes se demora demasiado, que podemos hacer para garantizar que
+> cargue correctamente
+
+Con solo 61 pedidos totales en el mes filtrado — un volumen de datos
+mínimo — no debería tardar nada. Eso descarta que el problema sea "hay
+demasiados datos" y apunta a otra causa.
+
+### Causa raíz
+
+El patrón de **Cierre de mes** (borrar TODA la tabla `pedidos` de un
+golpe con `DELETE`, y volver a cargarla desde cero al mes siguiente) dos
+efectos secundarios en Postgres que un `DELETE` masivo siempre deja, y
+que nada en la aplicación estaba corrigiendo:
+
+1. **Estadísticas desactualizadas.** El planificador de consultas de
+   Postgres no cuenta las filas cada vez que consulta — usa estadísticas
+   guardadas (cuántas filas hay, cómo se distribuyen las fechas, etc.) que
+   se actualizan solas de vez en cuando (`autovacuum`). Después de un
+   `DELETE` de todos los pedidos seguido de una carga nueva, esas
+   estadísticas pueden seguir reflejando el volumen del mes anterior
+   durante un buen rato, y el planificador termina eligiendo un plan
+   pensado para una tabla mucho más grande de la que realmente hay.
+2. **Páginas "muertas" (bloat).** Un `DELETE` no libera el espacio en
+   disco de inmediato — dejar esas páginas atrás requiere `VACUUM`, que
+   solo corre automáticamente cuando se acumulan suficientes cambios. En
+   una tabla que se vacía de golpe una vez al mes (en vez de crecer poco
+   a poco), el umbral por defecto de `autovacuum` tarda en dispararse.
+
+Esto explica exactamente el patrón reportado: un filtro de un solo día
+usa el índice de fecha de forma muy acotada sin importar el estado de
+las estadísticas, mientras que un filtro de "todo el mes" — que
+prácticamente cubre toda la tabla actual, dado que Cierre de mes la deja
+con datos de un solo mes — es mucho más sensible a un plan mal elegido o
+a tener que recorrer páginas de bloat que ya no tienen filas vivas.
+
+### Fix
+
+1. **`ALTER TABLE pedidos SET (...)`**: se bajaron los umbrales de
+   `autovacuum` específicamente para `pedidos`, para que reaccione con
+   muchos menos cambios acumulados que el valor por defecto (pensado
+   para tablas que crecen gradualmente, no que se vacían de golpe una
+   vez al mes).
+2. **`eliminar_todos_los_pedidos()`** (la función que ejecuta el botón
+   "ELIMINAR" de Cierre de mes) ahora corre `ANALYZE pedidos;` justo
+   después del `DELETE`, dentro de la misma función — así el
+   planificador ya sabe que la tabla quedó vacía, sin esperar al
+   autovacuum.
+3. **Nueva función `refrescar_estadisticas_pedidos()`**, que el
+   importador llama automáticamente justo después de cada carga de
+   Pedidos (`pages/importar.js`) — así, apenas termina de subirse la
+   información del mes, las estadísticas quedan al día de inmediato.
+4. **Una sola vez, de forma manual** (no se puede meter dentro de una
+   función ni del script de migración): hay que correr
+
+   ```sql
+   VACUUM (FULL, ANALYZE) pedidos;
+   ```
+
+   en el SQL Editor de Supabase, **antes** de correr el script de
+   migración de esta etapa, para limpiar de una vez el bloat que ya se
+   acumuló en los cierres de mes anteriores. Con la tabla actual (pocos
+   pedidos) esto debería tardar apenas un instante y no bloquea nada
+   más.
+
+### Cómo instalar esta actualización
+
+1. En el SQL Editor de Supabase, corre primero (solo, sin nada más
+   pegado):
+   ```sql
+   VACUUM (FULL, ANALYZE) pedidos;
+   ```
+2. Luego pega y corre el contenido completo de
+   `supabase/etapa8_migracion_consolidada.sql` (como siempre — es
+   acumulativo y seguro de re-ejecutar).
+3. Reemplaza los archivos locales por los de este paquete y sube el
+   cambio a GitHub:
+   ```powershell
+   git add .
+   git commit -m "Corregir timeout del Dashboard por estadisticas desactualizadas tras Cierre de mes"
+   git push
+   ```
+   (cada línea por separado). Refresco forzado (Ctrl+Shift+R) — debe
+   decir "versión etapa39-...".
+
+Si después de esto el Dashboard sigue lento al filtrar todo el mes,
+dime y reviso el plan de la consulta directamente (`EXPLAIN ANALYZE`)
+para buscar otra causa — pero este patrón (Cierre de mes + estadísticas
+viejas) es, con datos tan pequeños, la explicación más probable con
+diferencia.

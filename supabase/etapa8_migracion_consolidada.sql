@@ -828,11 +828,56 @@ begin
   -- "safeupdate"); "where id is not null" borra todo igual, cumpliendo
   -- ese requisito.
   delete from pedidos where id is not null;
+  -- Después de vaciar la tabla por completo, las estadísticas que usa el
+  -- planificador de consultas quedan desactualizadas (siguen "creyendo"
+  -- que hay cientos de miles de filas) hasta que el autovacuum decida
+  -- correr por su cuenta. Mientras tanto, cualquier consulta del
+  -- Dashboard puede elegir un plan pensado para una tabla grande y
+  -- volverse lenta o hacer timeout con muy pocos datos reales. ANALYZE
+  -- (a diferencia de VACUUM) sí se puede ejecutar dentro de una función/
+  -- transacción, así que se hace aquí mismo, de una vez.
+  analyze pedidos;
   return total;
 end;
 $$;
 
 grant execute on function eliminar_todos_los_pedidos() to authenticated;
+
+-- ---------------------------------------------------------------------
+-- 11. Timeout del Dashboard al filtrar rangos amplios (ej. "todo el
+--    mes") aunque haya pocos pedidos reales — causa raíz: el patrón de
+--    "Cierre de mes" (borrar TODA la tabla `pedidos` y volver a cargarla
+--    desde cero cada mes) deja a Postgres con:
+--      a) estadísticas del planificador desactualizadas (cree que la
+--         tabla sigue teniendo el volumen del mes anterior), y
+--      b) páginas "muertas" (bloat) del DELETE masivo que no se liberan
+--         hasta que corre VACUUM — mientras tanto, cualquier plan que
+--         termine recorriendo esas páginas (más probable cuanto más
+--         amplio es el rango de fechas filtrado, ej. un mes completo
+--         frente a un solo día) es mucho más lento de lo que el número
+--         real de filas visibles sugiere.
+--    Este bloque: (1) hace que autovacuum reaccione con muchos menos
+--    cambios acumulados específicamente en `pedidos` (en vez del umbral
+--    por defecto, pensado para tablas que crecen gradualmente, no que se
+--    vacían de golpe una vez al mes), y (2) agrega una función que el
+--    importador llama justo después de cargar Pedidos para refrescar las
+--    estadísticas de inmediato, sin esperar al autovacuum.
+-- ---------------------------------------------------------------------
+alter table pedidos set (
+  autovacuum_vacuum_scale_factor = 0.02,
+  autovacuum_vacuum_threshold = 50,
+  autovacuum_analyze_scale_factor = 0.01,
+  autovacuum_analyze_threshold = 50
+);
+
+create or replace function refrescar_estadisticas_pedidos()
+returns void
+language sql
+as $$
+  analyze pedidos;
+$$;
+
+grant execute on function refrescar_estadisticas_pedidos() to authenticated;
 
 -- ---------------------------------------------------------------------
 -- 10. Corrección de datos ya cargados: quitar espacios sobrantes en

@@ -127,6 +127,20 @@ async function procesarPedidos(file, usuarioId) {
   const duracionMs = Math.round(performance.now() - inicio);
   await guardarLog('pedidos', file.name, usuarioId, filasCrudas.length, insertados, omitidosDetalle, duracionMs);
 
+  // Refresca las estadísticas de Postgres sobre la tabla pedidos justo
+  // después de cargar (y, sobre todo, después de un Cierre de mes que la
+  // vació por completo). Sin esto, el planificador de consultas se queda
+  // con estadísticas viejas hasta que el autovacuum decide correr por su
+  // cuenta, y mientras tanto puede elegir planes lentos para el Dashboard
+  // (notablemente al filtrar rangos amplios como "todo el mes"). No es
+  // grave si falla (usuario sin permisos, etc.) — no debe bloquear el
+  // resto de la importación.
+  try {
+    await supabase.rpc('refrescar_estadisticas_pedidos');
+  } catch (e) {
+    // silencioso a propósito
+  }
+
   return { tipo: 'Pedidos', archivo: file.name, totales: filasCrudas.length, insertados, omitidosDetalle, duracionMs };
 }
 
