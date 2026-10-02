@@ -13,8 +13,8 @@ const TIPOS = [
     multiple: true,
     ayuda: (
       <div style={{ fontSize: 11, opacity: 0.8, marginTop: 4, maxWidth: 620 }}>
-        <b>Ruta en el ERP:</b> Ventas → Consultas y reportes → Facturas y notas por ítems → Consulta &quot;BASE ABA CLAS&quot;.<br />
-        <b>Observaciones:</b> se deben bajar los últimos 2 meses, un archivo por mes, en formato .xlsx.
+        <b>Ruta en el ERP:</b> Ventas → Consultas y reportes → Facturas y notas por ítems → Consulta &quot;BASE POWER BI&quot;.<br />
+        <b>Observaciones:</b> se deben bajar los últimos 2 meses, un archivo por mes, en formato .xlsx o .csv.
         Selecciona los 2 archivos juntos (Ctrl+clic) antes de darle Importar.<br />
         <b>Frecuencia:</b> mensual. Cada vez que importes, se reemplaza la clasificación anterior por
         completo con lo que traigan los archivos que subas — no se acumula histórico, y el detalle de

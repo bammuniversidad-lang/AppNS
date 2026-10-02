@@ -1558,8 +1558,8 @@ separados — la aplicación deja subir varios a la vez y los combina
 antes de calcular.
 
 **Ruta en el ERP:** Ventas → Consultas y reportes → Facturas y notas
-por ítems → Consulta "BASE ABA CLAS". Bajar los últimos 2 meses, un
-archivo por mes, en formato .xlsx. Frecuencia: mensual. Esta misma
+por ítems → Consulta "BASE POWER BI". Bajar los últimos 2 meses, un
+archivo por mes, en formato .xlsx o .csv. Frecuencia: mensual. Esta misma
 información ya quedó como ayuda visible en la pantalla de Importar.
 
 ### Cómo se calcula (y por qué no pesa)
@@ -2076,3 +2076,54 @@ git push
 ```
 (cada línea por separado). Refresco forzado (Ctrl+Shift+R) — debe decir
 "versión etapa39d-...".
+
+## Etapa 40 (agregada) — cambio de consulta para Clasificación A/B/C/D: "BASE POWER BI"
+
+El ERP cambió el nombre de la consulta usada para bajar las Ventas de los
+últimos meses (la que alimenta la Clasificación A/B/C/D de clientes y
+referencias): antes era "BASE ABA CLAS", ahora es "BASE POWER BI" — misma
+ruta en el menú de Ventas, mismo tipo de archivo (uno por mes, los últimos
+2 meses), solo cambia el nombre de la consulta para no tener que mantener
+una consulta aparte solo para esto.
+
+### Bug encontrado y corregido antes de activar el cambio
+
+Al revisar un archivo real de "BASE POWER BI" se encontró que la columna
+**Costo promedio total** viene con el símbolo de moneda delante (ej.
+`$3.252.960`, y en devoluciones `-$4.829`), algo que "BASE ABA CLAS" no
+traía. El código que convierte ese texto a número no sabía quitar el "$",
+así que `Number("$3252960")` da `NaN` y la aplicación lo interpretaba como
+`0`. Se probó contra un archivo real completo (prueba fuera de la
+aplicación, sin tocar la base de datos): **sin corregir esto, el 100% de
+las filas habrían quedado con el monto en cero**, lo que habría hecho que
+la Clasificación A/B/C/D saliera completamente mal (todo en "D", el nivel
+más bajo) sin que la aplicación mostrara ningún error — simplemente habría
+calculado mal en silencio.
+
+### Fix
+
+En `mapearFilasVentasClasificacion` (`lib/importUtils.js`), antes de quitar
+los separadores de miles, ahora también se quita cualquier símbolo que no
+sea dígito, separador de miles/decimales o signo "-" (esto cubre el "$" y
+cualquier espacio). Se validó contra el archivo real: con el fix, 194.590
+de 195.923 filas quedan con un monto distinto de cero (lo esperado — las
+filas con monto legítimamente en cero, "Gran total" y filas sin C.O. se
+siguen descartando igual que antes), y las devoluciones en negativo
+(`-$4.829`) se leen correctamente como negativas.
+
+No cambia nada más del proceso: se sigue subiendo un archivo por mes (2
+archivos, Ctrl+clic), se sigue reemplazando la clasificación anterior por
+completo, y el detalle de Ventas sigue sin guardarse en la base de datos
+— solo el resultado (A/B/C/D) por cliente y por referencia.
+
+### Cómo instalar esta actualización
+
+No requiere cambios en Supabase (es solo código del lado de la
+aplicación). En PowerShell:
+```powershell
+git add .
+git commit -m "Adaptar importador de Clasificacion a la consulta BASE POWER BI (monto con simbolo de moneda)"
+git push
+```
+(cada línea por separado). Refresco forzado (Ctrl+Shift+R) — debe decir
+"versión etapa40-...".
