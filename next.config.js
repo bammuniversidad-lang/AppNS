@@ -2,7 +2,7 @@
 const nextConfig = {
   reactStrictMode: true,
   env: {
-    NEXT_PUBLIC_VERSION_APP: 'etapa39c-' + new Date().toISOString().slice(0, 10),
+    NEXT_PUBLIC_VERSION_APP: 'etapa39d-' + new Date().toISOString().slice(0, 10),
   },
 };
 

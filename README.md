@@ -2012,3 +2012,67 @@ git push
 ```
 (cada línea por separado). Refresco forzado (Ctrl+Shift+R) — debe decir
 "versión etapa39c-...".
+
+## Etapa 39d (agregada) — relajar autovacuum (consumo de E/S de fondo)
+
+El 1 de octubre, horas después de desplegar la Etapa 39c, el proyecto de
+Supabase agotó su presupuesto de E/S de disco por completo (el panel
+mostró el aviso correspondiente), degradando todo el proyecto — incluida
+la autenticación — y dejando la app sin poder iniciar sesión ni cargar
+datos (errores 503 en todas las peticiones a la base).
+
+Inicialmente se atribuyó esto solo a las consultas pesadas de diagnóstico
+corridas manualmente el día anterior (`EXPLAIN ANALYZE`, `VACUUM FULL`,
+pruebas de `work_mem`). Pero el crecimiento de datos del día siguiente fue
+mínimo y el problema persistió, lo cual no cuadra con "consultas puntuales
+de un día anterior" — el presupuesto de E/S mide operaciones de disco, no
+volumen de datos almacenados.
+
+### Causa real identificada
+
+Los valores de `autovacuum` configurados en la Etapa 39
+(`autovacuum_vacuum_scale_factor = 0.02`,
+`autovacuum_analyze_scale_factor = 0.01`, frente al default de Postgres de
+0.2 / 0.1) eran 10 veces más agresivos de lo normal. En una tabla de
+~180.000 filas que recibe importaciones/actualizaciones a diario, esto
+dispara `autovacuum` con solo que cambie un 1-2% de las filas — es decir,
+muchas veces al día, cada una leyendo y reescribiendo páginas reales de
+disco. Eso genera consumo de E/S de **fondo, continuo**, no solo durante
+una sesión de diagnóstico puntual, lo cual explica mejor por qué el
+problema persistió sin que hubiera cambios grandes en los datos.
+
+### Fix
+
+Se relajan esos valores a un punto intermedio
+(`autovacuum_vacuum_scale_factor = 0.1`,
+`autovacuum_analyze_scale_factor = 0.05`) — siguen siendo más sensibles
+que el default de Postgres, pero sin perseguir cada cambio mínimo. Esto
+es seguro porque el refresco de estadísticas tras los cambios masivos
+(cierre de mes, importaciones) ya no depende solo de que autovacuum
+reaccione rápido: desde la Etapa 39 existe `refrescar_estadisticas_pedidos()`,
+llamada explícitamente por el importador, y `analyze pedidos` dentro de
+`eliminar_todos_los_pedidos()`.
+
+**Importante:** este cambio no restaura el acceso de inmediato — el
+presupuesto de E/S ya agotado solo se recupera esperando a que la demanda
+baje al nivel base, o haciendo upgrade del plan de Supabase. Lo que evita
+es que se vuelva a agotar tan rápido una vez se recargue.
+
+No se revirtió el fix de la Etapa 39b (`dash_filtrado` como función `sql`)
+ni el de la 39c (`base_pendiente`) — esos corrigen la causa raíz real del
+timeout del Dashboard y revertirlos traería de vuelta ese problema.
+
+### Cómo instalar esta actualización
+
+Corre el script completo de `supabase/etapa8_migracion_consolidada.sql`
+en el SQL Editor de Supabase (puede fallar si el proyecto sigue con el
+presupuesto de E/S agotado — en ese caso espera a que se recargue, o haz
+el upgrade, y vuelve a intentarlo; es un cambio liviano de metadata, no
+reescribe la tabla). Luego:
+```powershell
+git add .
+git commit -m "Relajar autovacuum en pedidos para reducir consumo de E/S de fondo"
+git push
+```
+(cada línea por separado). Refresco forzado (Ctrl+Shift+R) — debe decir
+"versión etapa39d-...".

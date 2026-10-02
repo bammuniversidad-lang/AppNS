@@ -887,11 +887,24 @@ grant execute on function eliminar_todos_los_pedidos() to authenticated;
 --    vacían de golpe una vez al mes), y (2) agrega una función que el
 --    importador llama justo después de cargar Pedidos para refrescar las
 --    estadísticas de inmediato, sin esperar al autovacuum.
+--
+--    [Etapa 39d] Los valores originales (0.02 / 0.01) resultaron
+--    demasiado agresivos para un plan Nano: con una tabla de ~180.000
+--    filas que recibe importaciones diarias, disparaban autovacuum muy
+--    seguido durante todo el día, consumiendo presupuesto de E/S de
+--    fondo de forma continua (no solo durante el diagnóstico puntual).
+--    Como ya existe `refrescar_estadisticas_pedidos()` llamada
+--    explícitamente desde el importador (y `analyze pedidos` dentro de
+--    `eliminar_todos_los_pedidos()`), el refresco de estadísticas tras
+--    cambios masivos ya no depende tanto de que autovacuum reaccione
+--    rápido — así que se relajan estos valores a un punto intermedio
+--    (más sensible que el default de Postgres, pero sin perseguir cada
+--    cambio mínimo).
 -- ---------------------------------------------------------------------
 alter table pedidos set (
-  autovacuum_vacuum_scale_factor = 0.02,
+  autovacuum_vacuum_scale_factor = 0.1,
   autovacuum_vacuum_threshold = 50,
-  autovacuum_analyze_scale_factor = 0.01,
+  autovacuum_analyze_scale_factor = 0.05,
   autovacuum_analyze_threshold = 50
 );
 
