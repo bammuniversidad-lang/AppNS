@@ -393,8 +393,13 @@ export default function Pendientes({ tema, alternarTema }) {
           </thead>
           <tbody>
             {filasOrdenadas.map((f) => (
-              <tr key={f.id}>
-                <td>
+              <tr
+                key={f.id}
+                onClick={() => alternarSeleccion(f.id)}
+                className={`fila-clicable${seleccionados.has(f.id) ? ' fila-seleccionada' : ''}`}
+                title="Clic para seleccionar/quitar selección de esta fila"
+              >
+                <td onClick={(e) => e.stopPropagation()}>
                   <input
                     type="checkbox"
                     checked={seleccionados.has(f.id)}
@@ -410,7 +415,7 @@ export default function Pendientes({ tema, alternarTema }) {
                     )}
                   </td>
                 ))}
-                <td>
+                <td onClick={(e) => e.stopPropagation()}>
                   <select
                     value={f.motivo_id || ''}
                     onChange={(e) => asignarMotivo([f.id], e.target.value)}

@@ -479,6 +479,14 @@ th.ordenable:hover {
   background-color: #1e3a5f;
 }
 
+.fila-seleccionada td {
+  background-color: #bbdefb !important;
+}
+
+.tema-oscuro .fila-seleccionada td {
+  background-color: #0d47a1 !important;
+}
+
 .chip-filtro-activo {
   display: inline-flex;
   align-items: center;
