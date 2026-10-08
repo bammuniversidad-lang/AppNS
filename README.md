@@ -2127,3 +2127,70 @@ git push
 ```
 (cada línea por separado). Refresco forzado (Ctrl+Shift+R) — debe decir
 "versión etapa40-...".
+
+## Etapa 41 (agregada) — causa raíz real del timeout del Dashboard reaparecido el 08-10-2026: `authenticated` tenía su propio `statement_timeout` de 8s
+
+El 8 de octubre el usuario reportó "canceling statement due to statement timeout" en el
+Dashboard incluso con muy poca información (solo 8 días de octubre, un único C.O.) y con
+el plan gratuito de Supabase muy por debajo de cualquier límite (93 MB de 500 MB) — es
+decir, ni el incidente de E/S del 1-2 de octubre ni el volumen de datos explicaban esto.
+
+### Diagnóstico (medido, no especulado)
+
+1. Se encontró `pedidos` con `n_live_tup = 0`, `n_dead_tup = 186` y `last_vacuum` /
+   `last_analyze` en `NULL` — las estadísticas de esa tabla nunca se habían calculado (o
+   se perdieron en algún momento, posiblemente durante el incidente de E/S del 1-2 de
+   octubre). Se corrigió con `analyze pedidos;` manual — pero el timeout siguió igual, así
+   que esto era real pero no era la causa de este síntoma puntual.
+2. Se reconstruyó el cuerpo completo de `dashboard_completo()` como consulta independiente
+   con `EXPLAIN (ANALYZE, BUFFERS, TIMING)`, con los filtros exactos reportados (C.O. 001,
+   01 al 08 de octubre de 2026): **tiempo real de ejecución: 242 ms** — la consulta en sí
+   es sana y rápida.
+3. Se leyó el cuerpo de la respuesta 500 real de la aplicación (pestaña Network del
+   navegador): `{"code": "57014", "message": "canceling statement due to statement
+   timeout"}` — confirma que SÍ es un timeout real, no otro tipo de error.
+4. Se consultó directamente `pg_roles.rolconfig` para los 3 roles de la API:
+   - `authenticator` (el rol de LOGIN con el que PostgREST abre la conexión):
+     `statement_timeout=30s` (el que se configuró en el bloque 8 de este mismo archivo,
+     etapas anteriores).
+   - **`authenticated` (el rol al que PostgREST cambia con `SET ROLE` en cada request de
+     un usuario logueado — el que realmente ejecuta `dashboard_completo`):
+     `statement_timeout=8s`** — un límite propio, mucho más bajo, que nunca se había
+     tocado.
+   - `anon`: `statement_timeout=3s` (sin cambios, no aplica — ninguna pantalla pesada
+     corre sin sesión iniciada).
+
+### Causa raíz
+
+El `statement_timeout=30s` que se configuró en `authenticator` (Etapa 8) **nunca estuvo
+protegiendo las llamadas reales de la aplicación** — PostgREST se conecta como
+`authenticator` pero ejecuta la consulta real después de un `SET ROLE authenticated`, y
+Postgres aplica ahí la configuración propia de `authenticated`, no la de `authenticator`.
+Con un límite real de solo 8 segundos, y la variación de hasta 60× ya documentada en el
+rendimiento del plan gratuito/Nano (CPU compartida entre proyectos — la misma consulta
+puede tardar 0.24s en un momento y varios segundos más en otro sin que cambie nada en el
+código ni en los datos), es fácil que un pico normal de carga del servidor compartido
+empuje una consulta de 0.24s hasta superar el límite de 8s.
+
+### Fix
+
+Se agrega el mismo `statement_timeout` y `work_mem` que ya tenía `authenticator`
+(30s / 128MB) también al rol `authenticated`, que es el que de verdad importa para el uso
+normal de la aplicación con sesión iniciada.
+
+### Cómo instalar esta actualización
+
+Corre el script completo de `supabase/etapa8_migracion_consolidada.sql` en el SQL Editor
+de Supabase (son solo cambios de configuración de rol, no reescriben ninguna tabla).
+Verificación después de correrlo:
+```sql
+select rolname, rolconfig from pg_roles where rolname = 'authenticated';
+```
+debe mostrar `statement_timeout=30s` y `work_mem=128MB`. Luego:
+```powershell
+git add .
+git commit -m "Etapa 41: corregir statement_timeout real (rol authenticated, no authenticator)"
+git push
+```
+(cada línea por separado). Refresco forzado (Ctrl+Shift+R) — debe decir
+"versión etapa41-...".

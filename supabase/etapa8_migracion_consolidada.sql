@@ -828,6 +828,46 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------
+-- 8b. [Etapa 41] El statement_timeout y work_mem de los bloques 8 y 9
+--    de arriba SOLO se aplican a `authenticator` — el rol de LOGIN con
+--    el que PostgREST abre la conexión. Pero PostgREST hace
+--    `SET ROLE authenticated` (o `anon`) por cada request real de un
+--    usuario logueado, y Postgres aplica la configuración propia del
+--    rol de destino cuando eso pasa — así que si `authenticated` tiene
+--    su PROPIO `statement_timeout` más bajo (como en este proyecto:
+--    8s, encontrado con
+--    `select rolname, rolconfig from pg_roles where rolname = 'authenticated'`),
+--    ese es el límite real que gobierna el Dashboard y cualquier otra
+--    pantalla — el 30s de `authenticator` nunca estuvo protegiendo nada
+--    en la práctica. Esto se confirmó en vivo el 08-10-2026: una
+--    consulta real del Dashboard (dashboard_completo con 8 días de
+--    octubre, un solo C.O.) midió 0.24s ejecutada manualmente, pero
+--    fallaba con error 57014 "canceling statement due to statement
+--    timeout" al llamarla desde la aplicación — con la variación de
+--    hasta 60x ya documentada en el rendimiento del plan gratuito/Nano
+--    (CPU compartida entre proyectos), 8 segundos de margen no alcanza
+--    para absorber un pico normal de carga del servidor compartido.
+--    `anon` también tiene su propio límite (3s) — se deja igual porque
+--    ninguna pantalla que haga consultas pesadas corre bajo ese rol
+--    (siempre hay sesión iniciada primero).
+-- ---------------------------------------------------------------------
+do $$
+begin
+  execute 'alter role authenticated set statement_timeout = ''30s''';
+exception when others then
+  raise notice 'No se pudo ajustar el statement_timeout de authenticated automáticamente (%). Hazlo desde Project Settings > Database si lo necesitas.', sqlerrm;
+end;
+$$;
+
+do $$
+begin
+  execute 'alter role authenticated set work_mem = ''128MB''';
+exception when others then
+  raise notice 'No se pudo ajustar el work_mem de authenticated automáticamente (%). Hazlo desde Project Settings > Database si lo necesitas.', sqlerrm;
+end;
+$$;
+
+-- ---------------------------------------------------------------------
 -- 9. Cierre de mes: elimina TODOS los pedidos para empezar el mes
 --    siguiente con la base vacía (pensado para cuando no hay presupuesto
 --    para un plan de Supabase con más cómputo/almacenamiento — así el
