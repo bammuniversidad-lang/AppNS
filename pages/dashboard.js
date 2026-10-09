@@ -9,6 +9,7 @@ import TarjetasResumen from '../components/Tarjetas';
 import ErrorBoundary from '../components/ErrorBoundary';
 import { useAuth } from '../lib/AuthContext';
 import { supabase } from '../lib/supabaseClient';
+import { conReintento, mensajeErrorAmigable } from '../lib/conReintento';
 import { primerDiaMesActual, hoyISO } from '../lib/fechas';
 import { exportarDashboardExcel, exportarDashboardPowerPoint } from '../lib/exportarDashboard';
 
@@ -120,11 +121,14 @@ export default function Dashboard({ tema, alternarTema }) {
     setCargando(true);
     setError('');
     try {
-      const { data, error } = await supabase.rpc('dashboard_completo', parametrosRpc);
+      // Reintenta automáticamente si Supabase responde con un timeout
+      // transitorio (plan gratuito, cómputo compartido) antes de rendirse
+      // y mostrarle el error al usuario.
+      const { data, error } = await conReintento(() => supabase.rpc('dashboard_completo', parametrosRpc));
       if (error) throw error;
       setDatos(data);
     } catch (e) {
-      setError(e.message || 'Error cargando el dashboard.');
+      setError(mensajeErrorAmigable(e, 'Error cargando el dashboard'));
     } finally {
       setCargando(false);
     }

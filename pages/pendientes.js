@@ -5,6 +5,7 @@ import { ThOrdenable, useOrdenTabla } from '../components/TablaHeader';
 import TarjetasResumen from '../components/Tarjetas';
 import { useAuth } from '../lib/AuthContext';
 import { supabase } from '../lib/supabaseClient';
+import { conReintento, mensajeErrorAmigable } from '../lib/conReintento';
 import { primerDiaMesActual, hoyISO } from '../lib/fechas';
 
 const COLUMNAS_CON_FILTRO = ['co', 'desc_item', 'referencia', 'proveedor', 'bodega'];
@@ -86,28 +87,34 @@ export default function Pendientes({ tema, alternarTema }) {
     setMotivos(data || []);
   }
 
-  async function cargarPendientes() {
-    setCargando(true);
+  function construirConsultaPendientes() {
     let consulta = supabase.from('v_pendientes').select('*');
     if (fechaInicio) consulta = consulta.gte('fecha_actualizacion', fechaInicio);
     if (fechaFin) consulta = consulta.lte('fecha_actualizacion', fechaFin);
     if (soloSinMotivo) consulta = consulta.is('motivo_id', null);
     if (cosPermitidos) consulta = consulta.in('co', cosPermitidos.length ? cosPermitidos : ['__ninguno__']);
+    return consulta.order('co', { ascending: true }).order('referencia', { ascending: true });
+  }
 
+  async function cargarPendientes() {
+    setCargando(true);
     const co_list = cosPermitidos && cosPermitidos.length ? cosPermitidos : null;
 
+    // Cada consulta se reintenta sola (con su propia función "crearConsulta")
+    // si Supabase responde con un timeout transitorio, en vez de fallar la
+    // pantalla completa al primer tropiezo.
     const [
       { data, error },
       { data: pc, error: errorPc },
       { data: pr, error: errorPr },
     ] = await Promise.all([
-      consulta.order('co', { ascending: true }).order('referencia', { ascending: true }),
-      supabase.rpc('obtener_clasificacion_cliente_ventas', { co_list }),
-      supabase.rpc('obtener_clasificacion_referencia_ventas', { co_list }),
+      conReintento(() => construirConsultaPendientes()),
+      conReintento(() => supabase.rpc('obtener_clasificacion_cliente_ventas', { co_list })),
+      conReintento(() => supabase.rpc('obtener_clasificacion_referencia_ventas', { co_list })),
     ]);
 
     if (errorPc || errorPr) {
-      setMensaje(`No se pudo calcular la clasificación: ${errorPc?.message || errorPr?.message}`);
+      setMensaje(mensajeErrorAmigable(errorPc || errorPr, 'No se pudo calcular la clasificación'));
     }
 
     if (!error) {
@@ -123,18 +130,18 @@ export default function Pendientes({ tema, alternarTema }) {
       }));
       setFilas(filasConClasificacion);
     } else {
-      setMensaje(`Error cargando pendientes: ${error.message}`);
+      setMensaje(mensajeErrorAmigable(error, 'Error cargando pendientes'));
     }
     setCargando(false);
   }
 
   async function cargarTarjetas() {
-    const { data, error } = await supabase.rpc('get_pedidos_cards', {
+    const { data, error } = await conReintento(() => supabase.rpc('get_pedidos_cards', {
       co_list: cosPermitidos && cosPermitidos.length ? cosPermitidos : null,
       fecha_inicio: fechaInicio || null,
       fecha_fin: fechaFin || null,
       solo_sin_motivo: soloSinMotivo,
-    });
+    }));
     if (!error) setTarjetas(data?.[0] || null);
   }
 

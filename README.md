@@ -2194,3 +2194,68 @@ git push
 ```
 (cada línea por separado). Refresco forzado (Ctrl+Shift+R) — debe decir
 "versión etapa41-...".
+
+## Etapa 42 — Causa real del timeout del 8 de octubre + reintento automático
+
+### Diagnóstico (resumen; ver conversación completa para el detalle paso a paso)
+
+Se midió con evidencia (no suposición) cada hipótesis:
+- Falta de índice en `pedidos`: descartada, ya existía.
+- La consulta sin filtro de CO (`p_co_list = null`, "Todos") siendo lenta por volumen:
+  descartada — `select count(*)` mostró 48.850 filas vs 25.739 con `co='001'`, solo ~1,9×.
+- `statement_timeout` mal aplicado: descartada — confirmado en `pg_roles` que
+  `authenticator`/`authenticated` ya tenían 30s (Etapa 41).
+- RLS agregando costo excesivo: descartada — se ejecutó `dashboard_completo()` real, bajo
+  el rol `authenticated`, con RLS activo (las 4 tablas lo tienen: `pedidos`,
+  `clasificacion_referencia_ventas`, `clientes`, `motivos`) → **2.3 segundos**
+  (`EXPLAIN (ANALYZE, BUFFERS, TIMING)`), muy por debajo de cualquier timeout.
+
+Con la consulta descartada como causa, el log de Supabase durante el incidente mostró:
+```
+Warp server error: Thread killed by timeout manager
+```
+Esto es un timeout del propio proceso de PostgREST (Warp = su servidor HTTP), no de
+Postgres — consistente con la inestabilidad ya documentada del cómputo compartido del
+plan Free/Nano (variación de hasta 60× en el tiempo de una misma consulta, ver Etapa 41),
+no con un problema de código, índices o configuración.
+
+De paso se encontró y corrigió un bug real y más urgente: el `work_mem` de los roles
+había quedado guardado como `'128mb'` (minúsculas) — valor inválido para Postgres, que
+exige el sufijo en mayúscula (`MB`) — y esto rompía **todas** las requests autenticadas
+con error `22023`, no solo el Dashboard (se vio también en Pendientes). Se corrigió
+re-ejecutando el `ALTER ROLE` con el valor correcto.
+
+### Fix
+
+1. **Mitigación de la inestabilidad del servidor compartido** (no elimina la causa de
+   raíz — eso requeriría subir a un plan con cómputo dedicado — pero reduce el riesgo):
+   - Reintento automático en el frontend: nuevo `lib/conReintento.js`, usado en
+     `dashboard.js` (`dashboard_completo`) y `pendientes.js` (la consulta de `v_pendientes`
+     y las 3 llamadas RPC de esa pantalla). Si Supabase responde con un timeout u otro
+     error transitorio, la app reintenta sola (hasta 2 veces, con espera creciente) antes
+     de mostrarle el error al usuario, y si aun así falla, el mensaje ahora es más claro
+     ("el servidor tardó más de lo normal...") en vez del código técnico de Postgres.
+   - `work_mem` subido de 128MB a 256MB en los tres roles (`authenticator`,
+     `authenticated`, `anon`), esta vez con el formato correcto (`256MB`, mayúsculas). En
+     el EXPLAIN se vio *spill* a disco temporal en varias de las agregaciones de
+     `dashboard_completo()`; con más memoria disponible esas agregaciones se resuelven en
+     memoria, lo que baja el tiempo base de la consulta y da más colchón.
+
+### Cómo instalar esta actualización
+
+Las tres sentencias de `work_mem` del final de
+`supabase/etapa8_migracion_consolidada.sql` (sección 12) conviene correrlas **cada una
+por separado** en el SQL Editor (no todo el script de un tirón), porque ya se vio antes
+en este proyecto que un error en otra parte de un script largo puede revertir en
+silencio cambios de configuración de rol que sí habían funcionado. Verificación después:
+```sql
+select rolname, rolconfig from pg_roles where rolname in ('authenticator','authenticated','anon');
+```
+debe mostrar `work_mem=256MB` (mayúsculas) en los tres. Luego:
+```powershell
+git add .
+git commit -m "Etapa 42: reintento automatico ante timeouts transitorios + mas work_mem"
+git push
+```
+(cada línea por separado). Refresco forzado (Ctrl+Shift+R) — debe decir
+"versión etapa42-...".

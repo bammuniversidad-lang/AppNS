@@ -966,4 +966,64 @@ grant execute on function refrescar_estadisticas_pedidos() to authenticated;
 update pedidos set cliente_factura = trim(cliente_factura) where cliente_factura is not null and cliente_factura <> trim(cliente_factura);
 update pedidos set sucursal_despacho = trim(sucursal_despacho) where sucursal_despacho is not null and sucursal_despacho <> trim(sucursal_despacho);
 
+-- ---------------------------------------------------------------------
+-- 12. [Etapa 42] Diagnóstico del "canceling statement due to timeout" del
+--    8 de octubre (dashboard_completo con p_co_list = null, "Todos").
+--    Se descartó, con evidencia medida y no por suposición:
+--      - Falta de índice: ya existía el índice compuesto necesario.
+--      - La consulta sin filtro de CO siendo lenta por volumen: con RLS
+--        activo y el rol authenticated real, dashboard_completo() tardó
+--        2.3s (EXPLAIN ANALYZE) — muy por debajo de cualquier timeout.
+--      - statement_timeout mal aplicado: confirmado en pg_roles que
+--        authenticator/authenticated ya tienen 30s.
+--    Lo que sí se confirmó en los logs de Supabase durante el incidente:
+--    "Warp server error: Thread killed by timeout manager" — un timeout
+--    a nivel del propio proceso de PostgREST (no de Postgres), señal de
+--    inestabilidad del cómputo compartido del plan Free/Nano (ya
+--    documentado antes en este proyecto: hasta 60x de variación en el
+--    tiempo de una misma consulta según qué tan ocupados estén los
+--    demás proyectos del mismo servidor compartido).
+--
+--    De paso se encontró y corrigió un bug real: el work_mem de los
+--    roles había quedado guardado como '128mb' (minúsculas), un valor
+--    inválido para Postgres (exige "MB" en mayúscula) que rompía TODAS
+--    las requests autenticadas con error 22023, no solo el Dashboard.
+--
+--    Este bloque sube work_mem a 256MB (antes 128MB) para darle más
+--    margen a las agregaciones de dashboard_completo() — en el EXPLAIN
+--    se vio "spill" a disco temporal (temp read/written) en varias de
+--    las HashAggregate; con más memoria de trabajo disponible, esas
+--    agregaciones se resuelven en memoria en vez de a disco, lo que
+--    reduce el tiempo base y da más colchón frente a la variabilidad
+--    del servidor compartido. No elimina la causa de raíz (eso requiere
+--    cómputo dedicado, osea subir de plan), pero reduce el riesgo.
+--    El mecanismo de reintento automático en el frontend (lib/conReintento.js)
+--    es el complemento: si aun así una consulta puntual se cae por un
+--    timeout transitorio, la app reintenta sola antes de mostrarle el
+--    error al usuario.
+-- ---------------------------------------------------------------------
+do $$
+begin
+  execute 'alter role authenticator set work_mem = ''256MB''';
+exception when others then
+  raise notice 'No se pudo ajustar el work_mem de authenticator automáticamente (%). Hazlo desde Project Settings > Database si lo necesitas.', sqlerrm;
+end;
+$$;
+
+do $$
+begin
+  execute 'alter role authenticated set work_mem = ''256MB''';
+exception when others then
+  raise notice 'No se pudo ajustar el work_mem de authenticated automáticamente (%). Hazlo desde Project Settings > Database si lo necesitas.', sqlerrm;
+end;
+$$;
+
+do $$
+begin
+  execute 'alter role anon set work_mem = ''256MB''';
+exception when others then
+  raise notice 'No se pudo ajustar el work_mem de anon automáticamente (%). Hazlo desde Project Settings > Database si lo necesitas.', sqlerrm;
+end;
+$$;
+
 notify pgrst, 'reload schema';
