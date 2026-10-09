@@ -2219,42 +2219,65 @@ Postgres — consistente con la inestabilidad ya documentada del cómputo compar
 plan Free/Nano (variación de hasta 60× en el tiempo de una misma consulta, ver Etapa 41),
 no con un problema de código, índices o configuración.
 
-De paso se encontró y corrigió un bug real y más urgente: el `work_mem` de los roles
-había quedado guardado como `'128mb'` (minúsculas) — valor inválido para Postgres, que
-exige el sufijo en mayúscula (`MB`) — y esto rompía **todas** las requests autenticadas
-con error `22023`, no solo el Dashboard (se vio también en Pendientes). Se corrigió
-re-ejecutando el `ALTER ROLE` con el valor correcto.
+De paso se encontró un bug real — pero no nuestro: de PostgREST en este proyecto. Al
+subir `work_mem` por rol (primero a 128MB, luego a 256MB), cada vez la app empezó a
+fallar con `error 22023 invalid value for parameter "work_mem"` mostrando el mismo
+número que acabábamos de poner, **pero en minúscula** (`128mb`, luego `256mb`) — y esto
+rompía **todas** las requests autenticadas, no solo el Dashboard (se vio también en
+Pendientes y hasta en una tabla simple como `profiles`). `pg_roles` siempre mostró el
+valor correcto en mayúscula; el problema es que PostgREST, al reaplicar la configuración
+de rol en cada request (la consulta interna `set_config(...)` que se ve en los logs),
+convierte el sufijo de la unidad a minúscula antes de mandarlo a Postgres — que exige
+`MB`/`kB`/`GB` exactos. Por eso **cualquier** valor que le pongamos a `work_mem` por rol
+se rompe, sin importar el formato. `statement_timeout` no sufre esto porque su unidad
+válida (`s`) ya es minúscula.
+
+Mientras esto no se reporte y resuelva con Supabase, se **revirtió por completo**: los
+tres roles quedan con `work_mem` en su valor por defecto (`RESET`, no un número fijo). Si
+en el futuro hace falta más memoria para una consulta puntual, la forma segura es un
+`SET work_mem = '...'` dentro de la propia función SQL/plpgsql (eso sí lo ejecuta
+Postgres directamente, sin pasar por el mecanismo de PostgREST que tiene el bug), nunca
+`ALTER ROLE ... SET work_mem`.
+
+También se encontró, por el camino, que `NOTIFY pgrst, 'reload schema'` (lo único que
+mandábamos hasta ahora) **no** refresca el caché de configuración de roles que usa
+PostgREST — solo refresca tablas/funciones/vistas. El canal correcto para eso es
+`NOTIFY pgrst, 'reload config'`. Sin mandarlo, un `ALTER ROLE` puede quedar perfecto en
+la base de datos y PostgREST seguir aplicando por detrás el valor viejo que tenía
+cacheado.
 
 ### Fix
 
-1. **Mitigación de la inestabilidad del servidor compartido** (no elimina la causa de
-   raíz — eso requeriría subir a un plan con cómputo dedicado — pero reduce el riesgo):
-   - Reintento automático en el frontend: nuevo `lib/conReintento.js`, usado en
-     `dashboard.js` (`dashboard_completo`) y `pendientes.js` (la consulta de `v_pendientes`
-     y las 3 llamadas RPC de esa pantalla). Si Supabase responde con un timeout u otro
-     error transitorio, la app reintenta sola (hasta 2 veces, con espera creciente) antes
-     de mostrarle el error al usuario, y si aun así falla, el mensaje ahora es más claro
-     ("el servidor tardó más de lo normal...") en vez del código técnico de Postgres.
-   - `work_mem` subido de 128MB a 256MB en los tres roles (`authenticator`,
-     `authenticated`, `anon`), esta vez con el formato correcto (`256MB`, mayúsculas). En
-     el EXPLAIN se vio *spill* a disco temporal en varias de las agregaciones de
-     `dashboard_completo()`; con más memoria disponible esas agregaciones se resuelven en
-     memoria, lo que baja el tiempo base de la consulta y da más colchón.
+**Mitigación de la inestabilidad del servidor compartido** (no elimina la causa de raíz
+del timeout original — eso requeriría subir a un plan con cómputo dedicado — pero reduce
+el impacto):
+- Reintento automático en el frontend: nuevo `lib/conReintento.js`, usado en
+  `dashboard.js` (`dashboard_completo`) y `pendientes.js` (la consulta de `v_pendientes`
+  y las 3 llamadas RPC de esa pantalla). Si Supabase responde con un timeout u otro
+  error transitorio, la app reintenta sola (hasta 2 veces, con espera creciente) antes de
+  mostrarle el error al usuario, y si aun así falla, el mensaje ahora es más claro ("el
+  servidor tardó más de lo normal...") en vez del código técnico de Postgres.
+- `work_mem` por rol: revertido a `RESET` (ver explicación arriba) — **no** se subió a
+  256MB en la versión final de este cambio, por el bug de PostgREST.
+- `supabase/etapa8_migracion_consolidada.sql` ahora manda `NOTIFY pgrst, 'reload config'`
+  además de `'reload schema'`, para que un cambio de configuración de rol se refleje de
+  inmediato sin tener que acordarse de este paso extra.
 
 ### Cómo instalar esta actualización
 
-Las tres sentencias de `work_mem` del final de
-`supabase/etapa8_migracion_consolidada.sql` (sección 12) conviene correrlas **cada una
-por separado** en el SQL Editor (no todo el script de un tirón), porque ya se vio antes
-en este proyecto que un error en otra parte de un script largo puede revertir en
-silencio cambios de configuración de rol que sí habían funcionado. Verificación después:
+Corre el script completo de `supabase/etapa8_migracion_consolidada.sql` en el SQL Editor
+(son solo cambios de configuración de rol — `RESET work_mem` y los dos `NOTIFY`). Si
+prefieres ir seguro, corre cada sentencia por separado (ya se vio antes en este proyecto
+que un error en otra parte de un script largo puede revertir en silencio cambios que sí
+habían funcionado). Verificación después:
 ```sql
 select rolname, rolconfig from pg_roles where rolname in ('authenticator','authenticated','anon');
 ```
-debe mostrar `work_mem=256MB` (mayúsculas) en los tres. Luego:
+no debe mostrar `work_mem` en ninguno de los tres (solo `statement_timeout` y, en
+`authenticator`, `session_preload_libraries` / `lock_timeout`). Luego:
 ```powershell
 git add .
-git commit -m "Etapa 42: reintento automatico ante timeouts transitorios + mas work_mem"
+git commit -m "Etapa 42: revertir work_mem por rol (bug de PostgREST) + reintento automatico + notify reload config"
 git push
 ```
 (cada línea por separado). Refresco forzado (Ctrl+Shift+R) — debe decir

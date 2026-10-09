@@ -809,21 +809,31 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------
--- 9. Aumentar la memoria disponible por consulta (work_mem). Con pocos
---    meses de datos no se notaba, pero con varios meses (cientos de
---    miles de filas), Postgres se queda sin memoria para ordenar y
---    agrupar, y termina usando el disco en su lugar — mucho más lento.
---    Con más memoria, esas operaciones se hacen en RAM.
---    (Etapa 39b: subido de 64MB a 128MB — con 180.325 filas reales en un
---    solo mes, materializar la base completa del Dashboard se queda
---    corta con 64MB. El fix principal de este turno es otro (dash_filtrado
---    pasó de plpgsql a sql, más arriba) — esto es margen adicional.)
+-- 9. [Etapa 39b → revertido en Etapa 42] Se había subido work_mem por rol
+--    (64MB → 128MB → 256MB) para dar más margen a las agregaciones
+--    pesadas del Dashboard. Se revirtió por completo el 09-10-2026: en
+--    este proyecto, PostgREST cachea/reaplica la configuración de rol
+--    pasándola por un paso que convierte el sufijo de la unidad a
+--    minúscula antes de mandarla a Postgres vía set_config() — y Postgres
+--    exige "MB"/"kB"/"GB" en mayúscula. El resultado era que CUALQUIER
+--    valor que le pusiéramos a work_mem (128MB, 256MB, lo que sea)
+--    terminaba rompiendo TODAS las requests autenticadas con error 22023
+--    "invalid value for parameter work_mem", no solo el Dashboard.
+--    (statement_timeout no sufre esto porque su unidad válida, "s", ya
+--    es minúscula, así que no se nota el bug.)
+--    Mientras esto no se reporte y resuelva con Supabase, el work_mem
+--    por rol se deja en RESET (usa el default del plan, ver
+--    `select * from pg_settings where name = 'work_mem'`) y cualquier
+--    necesidad de más memoria para una consulta puntual debe resolverse
+--    con un `SET work_mem = '...'` dentro de la propia función SQL/plpgsql
+--    (eso sí funciona: lo ejecuta Postgres directamente, sin pasar por el
+--    mecanismo de PostgREST que tiene el bug), no con ALTER ROLE.
 -- ---------------------------------------------------------------------
 do $$
 begin
-  execute 'alter role authenticator set work_mem = ''128MB''';
+  execute 'alter role authenticator reset work_mem';
 exception when others then
-  raise notice 'No se pudo ajustar el work_mem automáticamente (%). Hazlo desde Project Settings > Database si lo necesitas.', sqlerrm;
+  raise notice 'No se pudo resetear el work_mem de authenticator automáticamente (%). Hazlo desde Project Settings > Database si lo necesitas.', sqlerrm;
 end;
 $$;
 
@@ -859,11 +869,14 @@ exception when others then
 end;
 $$;
 
+-- work_mem de authenticated: ver nota de la Etapa 42 en el bloque 9 de
+-- arriba — se deja en RESET por el bug de PostgREST con unidades de
+-- memoria en mayúscula.
 do $$
 begin
-  execute 'alter role authenticated set work_mem = ''128MB''';
+  execute 'alter role authenticated reset work_mem';
 exception when others then
-  raise notice 'No se pudo ajustar el work_mem de authenticated automáticamente (%). Hazlo desde Project Settings > Database si lo necesitas.', sqlerrm;
+  raise notice 'No se pudo resetear el work_mem de authenticated automáticamente (%). Hazlo desde Project Settings > Database si lo necesitas.', sqlerrm;
 end;
 $$;
 
@@ -984,46 +997,29 @@ update pedidos set sucursal_despacho = trim(sucursal_despacho) where sucursal_de
 --    tiempo de una misma consulta según qué tan ocupados estén los
 --    demás proyectos del mismo servidor compartido).
 --
---    De paso se encontró y corrigió un bug real: el work_mem de los
---    roles había quedado guardado como '128mb' (minúsculas), un valor
---    inválido para Postgres (exige "MB" en mayúscula) que rompía TODAS
---    las requests autenticadas con error 22023, no solo el Dashboard.
+--    De paso se encontró un bug real de PostgREST en este proyecto (no
+--    nuestro): al reaplicar la configuración de rol en cada request,
+--    convierte el sufijo de la unidad de work_mem a minúscula antes de
+--    mandarla a Postgres, que exige "MB" en mayúscula — así que
+--    CUALQUIER valor que le pusiéramos a work_mem por rol (128MB, 256MB)
+--    rompía TODAS las requests autenticadas con error 22023, no solo el
+--    Dashboard. Por eso el bloque 9 (arriba) quedó en RESET en vez de
+--    con un valor fijo — ver esa nota para el detalle completo.
 --
---    Este bloque sube work_mem a 256MB (antes 128MB) para darle más
---    margen a las agregaciones de dashboard_completo() — en el EXPLAIN
---    se vio "spill" a disco temporal (temp read/written) en varias de
---    las HashAggregate; con más memoria de trabajo disponible, esas
---    agregaciones se resuelven en memoria en vez de a disco, lo que
---    reduce el tiempo base y da más colchón frente a la variabilidad
---    del servidor compartido. No elimina la causa de raíz (eso requiere
---    cómputo dedicado, osea subir de plan), pero reduce el riesgo.
---    El mecanismo de reintento automático en el frontend (lib/conReintento.js)
---    es el complemento: si aun así una consulta puntual se cae por un
---    timeout transitorio, la app reintenta sola antes de mostrarle el
---    error al usuario.
+--    Lo que sí se deja de esta etapa: el reintento automático en el
+--    frontend (lib/conReintento.js, usado en dashboard.js y
+--    pendientes.js) — si una consulta puntual se cae por un timeout
+--    transitorio del servidor compartido, la app reintenta sola antes de
+--    mostrarle el error al usuario. No elimina la causa de raíz del
+--    timeout original (eso requiere cómputo dedicado, osea subir de
+--    plan), pero reduce el impacto.
 -- ---------------------------------------------------------------------
-do $$
-begin
-  execute 'alter role authenticator set work_mem = ''256MB''';
-exception when others then
-  raise notice 'No se pudo ajustar el work_mem de authenticator automáticamente (%). Hazlo desde Project Settings > Database si lo necesitas.', sqlerrm;
-end;
-$$;
 
-do $$
-begin
-  execute 'alter role authenticated set work_mem = ''256MB''';
-exception when others then
-  raise notice 'No se pudo ajustar el work_mem de authenticated automáticamente (%). Hazlo desde Project Settings > Database si lo necesitas.', sqlerrm;
-end;
-$$;
-
-do $$
-begin
-  execute 'alter role anon set work_mem = ''256MB''';
-exception when others then
-  raise notice 'No se pudo ajustar el work_mem de anon automáticamente (%). Hazlo desde Project Settings > Database si lo necesitas.', sqlerrm;
-end;
-$$;
-
+-- PostgREST cachea la configuración de roles (statement_timeout,
+-- work_mem, etc.) y solo la relee cuando recibe 'reload config' —
+-- 'reload schema' solo refresca tablas/funciones/vistas, NO esta config.
+-- Sin este NOTIFY, un ALTER ROLE puede quedar perfecto en Postgres y aun
+-- así seguir fallando en producción porque PostgREST sigue usando el
+-- valor viejo que tenía cacheado.
+notify pgrst, 'reload config';
 notify pgrst, 'reload schema';
